@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ app_name }}</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="logo">⚡</span>
+      <h1>{{ app_name }}</h1>
+      <span class="tag">ML · short-dated options (&lt; 1 mo)</span>
+    </div>
+    <div class="header-actions">
+      <button id="train-btn" class="btn ghost">Train models</button>
+      <button id="refresh-btn" class="btn">Refresh signals</button>
+    </div>
+  </header>
+
+  <div class="disclaimer">
+    ⚠️ <strong>Educational paper-trading only.</strong> Not financial advice.
+    No real orders are placed. Options trading carries substantial risk of loss.
+  </div>
+
+  <main>
+    <section class="cards" id="summary-cards"></section>
+
+    <div class="grid">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Model Signals</h2>
+          <span id="signals-status" class="muted"></span>
+        </div>
+        <table id="signals-table">
+          <thead>
+            <tr><th>Symbol</th><th>Bias</th><th>Conf.</th><th>Contract</th>
+            <th>DTE</th><th>Mid</th><th>B/E</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Price &amp; Signal</h2>
+          <select id="chart-symbol"></select>
+        </div>
+        <canvas id="price-chart" height="160"></canvas>
+        <div id="signal-detail" class="signal-detail muted">Select a symbol.</div>
+      </section>
+    </div>
+
+    <div class="grid">
+      <section class="panel">
+        <div class="panel-head"><h2>Open Positions</h2></div>
+        <table id="positions-table">
+          <thead>
+            <tr><th>Symbol</th><th>Type</th><th>Strike</th><th>Exp</th><th>Qty</th>
+            <th>Entry</th><th>Now</th><th>P&amp;L</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>Model Performance</h2></div>
+        <table id="models-table">
+          <thead>
+            <tr><th>Symbol</th><th>Accuracy</th><th>ROC-AUC</th><th>Samples</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Recent Trades</h2></div>
+      <table id="trades-table">
+        <thead>
+          <tr><th>Time</th><th>Symbol</th><th>Side</th><th>Type</th><th>Qty</th>
+          <th>Price</th><th>Realized P&amp;L</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script>const WATCHLIST = {{ watchlist | tojson }};</script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

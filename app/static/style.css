@@ -53,6 +53,23 @@ header {
   padding: 8px 24px; font-size: 13px;
 }
 
+.banner {
+  margin: 14px 24px 0; padding: 12px 16px; border-radius: 10px;
+  font-size: 14px; border: 1px solid;
+}
+.banner.hidden { display: none; }
+.banner.error { background: #2a1216; border-color: #5a1f28; color: #ffb3bd; }
+.banner.warn { background: #2a2312; border-color: #5a4a1f; color: #ffe0a0; }
+.banner.info { background: #12202a; border-color: #1f4a5a; color: #a0e0ff; }
+.banner.ok { background: #122a18; border-color: #1f5a2f; color: #a0ffc0; }
+.banner code { background: rgba(255,255,255,.08); padding: 1px 6px; border-radius: 4px; }
+.spinner {
+  display: inline-block; width: 12px; height: 12px; margin-right: 8px;
+  border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
+  border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
 main { padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 18px; }

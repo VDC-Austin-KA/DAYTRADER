@@ -21,6 +21,24 @@ class Settings(BaseSettings):
     # Railway provides DATABASE_URL for the attached Postgres plugin.
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./daytrader.db")
 
+    # --- Market data (Tradier) ---
+    # Create a free developer account at https://developer.tradier.com and paste
+    # the access token here / as a Railway service variable.
+    tradier_token: str = os.getenv("TRADIER_TOKEN", "")
+    # Sandbox: https://sandbox.tradier.com/v1  |  Production: https://api.tradier.com/v1
+    tradier_base_url: str = os.getenv(
+        "TRADIER_BASE_URL", "https://sandbox.tradier.com/v1"
+    )
+
+    # Train models automatically on startup if none exist and a token is set.
+    auto_train_on_start: bool = (
+        os.getenv("AUTO_TRAIN_ON_START", "true").lower() == "true"
+    )
+
+    @property
+    def has_data_source(self) -> bool:
+        return bool(self.tradier_token)
+
     # --- Paper-trading defaults ---
     starting_cash: float = float(os.getenv("STARTING_CASH", "100000"))
 

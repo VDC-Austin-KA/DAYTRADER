@@ -20,6 +20,19 @@ def health():
     return {"status": "ok"}
 
 
+@router.get("/datasource")
+def datasource():
+    """Whether the market-data provider is configured and reachable."""
+    return md.data_source_status()
+
+
+@router.get("/train/status")
+def train_status():
+    from ..training import TRAINING_STATUS
+
+    return TRAINING_STATUS
+
+
 @router.get("/config")
 def config():
     return {
@@ -120,12 +133,19 @@ def scan_options(symbol: str, direction: str = "call"):
 @router.post("/train")
 def train(req: TrainRequest, background: BackgroundTasks,
           db: Session = Depends(get_db)):
-    # Training can be slow; run inline for explicit small requests else background.
+    if not settings.has_data_source:
+        raise HTTPException(
+            400,
+            "No market-data source configured. Set TRADIER_TOKEN (free) so models "
+            "have data to train on. See the README.",
+        )
+    from ..training import TRAINING_STATUS
+
+    if TRAINING_STATUS.get("running"):
+        raise HTTPException(409, "Training is already in progress.")
     symbols = req.symbols or settings.default_watchlist
-    if len(symbols) <= 3:
-        return {"results": train_universe(db, symbols)}
     background.add_task(_train_bg, symbols)
-    return {"status": "training_started", "symbols": symbols}
+    return {"status": "training_started", "symbols": symbols, "count": len(symbols)}
 
 
 def _train_bg(symbols: list[str]) -> None:

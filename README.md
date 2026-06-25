@@ -15,9 +15,32 @@ the resulting signals — all from a single dashboard. Designed to deploy on
 
 ## What it does
 
+## ⚙️ Required: connect market data (Tradier)
+
+The app needs a market-data source. It uses **[Tradier](https://developer.tradier.com)**,
+which has a **free** developer token and provides real option chains (with greeks)
+plus historical prices — and, unlike free keyless sources (Yahoo/Stooq), it works
+reliably from cloud hosts like Railway.
+
+1. Create a free account at **https://developer.tradier.com**.
+2. Create an app and copy the **Access Token**.
+3. Set it as an environment variable / Railway service variable:
+   ```
+   TRADIER_TOKEN=your_token_here
+   TRADIER_BASE_URL=https://sandbox.tradier.com/v1   # sandbox = delayed quotes, real chains
+   ```
+4. Redeploy. On startup the app auto-trains models for the watchlist, then
+   populates signals. The dashboard shows a banner if the token is missing or invalid.
+
+> Sandbox gives delayed quotes and real option chains — perfect for paper trading.
+> For real-time data, use a funded Tradier brokerage token with
+> `TRADIER_BASE_URL=https://api.tradier.com/v1`.
+
+## What it does
+
 | Layer | Detail |
 |-------|--------|
-| **Data** | Free daily history + live option chains via `yfinance` (no API key) |
+| **Data** | Historical prices + live option chains (with greeks) via the **Tradier** API |
 | **Features** | RSI, MACD, Bollinger position, ATR%, moving-average ratios, momentum, realized volatility, volume ratio |
 | **Model** | `GradientBoostingClassifier` per symbol, predicting whether the next *N*-day return clears a target move; time-ordered train/validation split |
 | **Signals** | Model probability → bullish/bearish/neutral bias → recommended **call/put** contract |
@@ -67,7 +90,8 @@ watchlist symbol), then **Refresh signals**.
 1. Push this repo to GitHub.
 2. In Railway: **New Project → Deploy from GitHub repo** (it auto-detects the `Dockerfile`).
 3. Add the **PostgreSQL** plugin — Railway injects `DATABASE_URL` automatically.
-4. (Optional) Set service variables from `.env.example` (e.g. `WATCHLIST`, `STARTING_CASH`).
+4. **Set `TRADIER_TOKEN`** (required — see "connect market data" above). Optionally
+   set `WATCHLIST`, `STARTING_CASH`, etc. from `.env.example`.
 5. Railway sets `$PORT`; the app binds to it. Health check: `/api/health`.
 
 That's it — the app starts, creates its tables, trains models on first boot

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -30,13 +31,23 @@ def refresh_all_signals() -> None:
         db.close()
 
 
-def retrain_if_needed() -> None:
+def bootstrap() -> None:
+    """One-time startup task: train models if none exist, then refresh signals.
+
+    Skips quietly when no market-data token is configured so the app still
+    boots and the dashboard can explain what's missing.
+    """
+    if not settings.has_data_source:
+        log.warning("no market-data token configured; skipping startup training")
+        return
     db = SessionLocal()
     try:
-        trained = db.query(ModelMeta).count()
-        if trained == 0:
+        if settings.auto_train_on_start and db.query(ModelMeta).count() == 0:
             log.info("no models found; training universe on startup")
             train_universe(db)
+        refresh_all_signals()
+    except Exception:
+        log.exception("startup bootstrap failed")
     finally:
         db.close()
 
@@ -61,6 +72,15 @@ def start_scheduler() -> None:
         day_of_week="sun",
         hour=6,
         id="weekly_retrain",
+        replace_existing=True,
+        max_instances=1,
+    )
+    # One-shot startup bootstrap a few seconds after boot (keeps healthcheck fast).
+    _scheduler.add_job(
+        bootstrap,
+        "date",
+        run_date=datetime.now() + timedelta(seconds=8),
+        id="startup_bootstrap",
         replace_existing=True,
         max_instances=1,
     )

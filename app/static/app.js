@@ -177,15 +177,82 @@ async function loadTrades() {
     : `<tr><td colspan="7" class="muted">No trades yet.</td></tr>`;
 }
 
-$("#train-btn").addEventListener("click", async () => {
-  toast("Training models — this can take a minute…");
+// --- Data-source status banner ---
+async function checkDataSource() {
+  const banner = $("#datasource-banner");
   try {
-    await api("/api/train", {
+    const s = await api("/api/datasource");
+    if (s.configured && s.ok) {
+      banner.classList.add("hidden");
+      return true;
+    }
+    banner.classList.remove("hidden");
+    if (!s.configured) {
+      banner.className = "banner warn";
+      banner.innerHTML = `🔌 <strong>No market-data source connected.</strong>
+        ${s.message} Set the <code>TRADIER_TOKEN</code> service variable in Railway
+        (free token from <a href="https://developer.tradier.com" target="_blank">developer.tradier.com</a>),
+        then redeploy. Until then there's no data to train on or trade.`;
+    } else {
+      banner.className = "banner error";
+      banner.innerHTML = `⚠️ <strong>Data source error.</strong> ${s.message}`;
+    }
+    return false;
+  } catch (e) {
+    banner.classList.remove("hidden");
+    banner.className = "banner error";
+    banner.textContent = "Could not check data source: " + e.message;
+    return false;
+  }
+}
+
+// --- Training progress polling ---
+let trainPoll = null;
+function showTraining(st) {
+  const b = $("#training-banner");
+  if (st.running) {
+    b.classList.remove("hidden");
+    b.className = "banner info";
+    b.innerHTML = `<span class="spinner"></span> Training models —
+      ${st.done}/${st.total} done${st.current ? " (" + st.current + ")" : ""}…
+      downloading history &amp; fitting a model per symbol.`;
+  } else if (st.finished_at && st.total) {
+    const trained = (st.last_results || []).filter(r => r.status === "trained").length;
+    b.classList.remove("hidden");
+    b.className = "banner ok";
+    b.innerHTML = `✅ Trained ${trained}/${st.total} models. Refreshing signals…`;
+    setTimeout(() => b.classList.add("hidden"), 6000);
+  } else {
+    b.classList.add("hidden");
+  }
+}
+async function pollTraining() {
+  try {
+    const st = await api("/api/train/status");
+    showTraining(st);
+    if (st.running) return;
+  } catch (e) { /* ignore */ }
+  if (trainPoll) { clearInterval(trainPoll); trainPoll = null; }
+  loadModels(); loadSignals(); loadSummary();
+}
+function startTrainingPoll() {
+  if (trainPoll) clearInterval(trainPoll);
+  pollTraining();
+  trainPoll = setInterval(pollTraining, 2500);
+}
+
+$("#train-btn").addEventListener("click", async () => {
+  if (!(await checkDataSource())) {
+    toast("Connect a data source first (set TRADIER_TOKEN).", true);
+    return;
+  }
+  try {
+    const r = await api("/api/train", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    toast("Training started/done. Refreshing…");
-    setTimeout(() => { loadModels(); }, 1500);
+    toast(`Training ${r.count} symbols — this can take a minute…`);
+    startTrainingPoll();
   } catch (e) { toast(e.message, true); }
 });
 
@@ -201,8 +268,11 @@ $("#refresh-btn").addEventListener("click", async () => {
 $("#chart-symbol").addEventListener("change", (e) => selectSymbol(e.target.value));
 
 // Initial load.
+checkDataSource();
 loadSummary();
 loadSignals();
 loadModels();
 loadTrades();
+startTrainingPoll();  // surfaces any startup auto-training in progress
 setInterval(loadSummary, 60000);
+setInterval(checkDataSource, 60000);

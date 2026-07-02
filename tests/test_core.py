@@ -94,6 +94,64 @@ def test_option_chain_parsing(monkeypatch):
     assert float(chain["calls"].iloc[0]["strike"]) == 190.0
 
 
+def test_pricing_helpers():
+    from app.trading import pricing
+
+    # ATM call worth more with more time / vol; prob within [0,1].
+    p_short = pricing.bs_price(100, 100, 3 / 365, 0.3, "call")
+    p_long = pricing.bs_price(100, 100, 30 / 365, 0.3, "call")
+    assert 0 < p_short < p_long
+    pop = pricing.prob_of_profit(100, 101, 3 / 365, 0.3, "call")
+    assert 0.0 <= pop <= 1.0
+    # Deep OTM call has low probability of profit.
+    pop_otm = pricing.prob_of_profit(100, 130, 3 / 365, 0.3, "call")
+    assert pop_otm < 0.1
+
+
+def test_opportunity_scan(monkeypatch):
+    """Scanner ranks cheap short-dated contracts (no network)."""
+    import pandas as pd
+
+    from app.data import market_data as md
+    from app.trading import opportunities as opp
+
+    monkeypatch.setattr(md, "get_quote", lambda s: 100.0)
+    monkeypatch.setattr(md, "get_history", lambda s, years=5: pd.DataFrame())
+    monkeypatch.setattr(md, "get_expirations", lambda s: ["2099-01-03"])
+    monkeypatch.setattr(md, "days_to_expiry", lambda e: 2)
+    monkeypatch.setattr(opp, "_historical_vol", lambda s: 0.30)
+    monkeypatch.setattr(
+        opp.ml_model, "predict_latest", lambda s, df: None
+    )
+
+    calls = pd.DataFrame([
+        {"contractSymbol": "C101", "strike": 101, "lastPrice": 0.5,
+         "bid": 0.45, "ask": 0.55, "impliedVolatility": 0.3,
+         "openInterest": 500, "volume": 100},
+        {"contractSymbol": "C120", "strike": 120, "lastPrice": 0.05,
+         "bid": 0.03, "ask": 0.07, "impliedVolatility": 0.3,
+         "openInterest": 10, "volume": 1},
+        {"contractSymbol": "C_EXPENSIVE", "strike": 100, "lastPrice": 5.0,
+         "bid": 4.9, "ask": 5.1, "impliedVolatility": 0.3,
+         "openInterest": 500, "volume": 100},  # too expensive, filtered
+    ])
+    puts = pd.DataFrame(columns=[
+        "contractSymbol", "strike", "lastPrice", "bid", "ask",
+        "impliedVolatility", "openInterest", "volume",
+    ])
+    monkeypatch.setattr(md, "get_option_chain", lambda s, e: {"calls": calls, "puts": puts})
+
+    res = opp.scan("TEST", max_dte=3, max_premium=1.0, max_cost=100)
+    contracts = [o["contract_symbol"] for o in res["opportunities"]]
+    assert "C_EXPENSIVE" not in contracts        # over budget -> excluded
+    assert "C101" in contracts and "C120" in contracts
+    # Nearer-the-money contract has higher probability of profit than deep OTM.
+    by = {o["contract_symbol"]: o for o in res["opportunities"]}
+    assert by["C101"]["prob_profit"] > by["C120"]["prob_profit"]
+    for o in res["opportunities"]:
+        assert o["cost"] <= 100 and o["mid"] <= 1.0
+
+
 def test_paper_engine(tmp_path, monkeypatch):
     # Use an isolated SQLite DB.
     from app import config

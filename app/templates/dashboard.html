@@ -31,6 +31,53 @@
   <main>
     <section class="cards" id="summary-cards"></section>
 
+    <section class="panel scanner">
+      <div class="panel-head">
+        <h2>🎯 Opportunity Scanner <span class="muted">— cheap short-dated options, ranked</span></h2>
+      </div>
+      <div class="scanner-controls">
+        <label>Ticker
+          <input id="scan-symbol" type="text" value="SPY" maxlength="6" />
+        </label>
+        <label>Side
+          <select id="scan-side">
+            <option value="both">Calls &amp; Puts</option>
+            <option value="call">Calls only</option>
+            <option value="put">Puts only</option>
+          </select>
+        </label>
+        <label>Max DTE
+          <input id="scan-dte" type="number" value="3" min="0" max="30" />
+        </label>
+        <label>Max $/option
+          <input id="scan-premium" type="number" value="1.00" min="0.01" step="0.05" />
+        </label>
+        <label>Max total cost
+          <input id="scan-cost" type="number" value="100" min="1" step="10" />
+        </label>
+        <button id="scan-btn" class="btn">Scan</button>
+      </div>
+      <div class="scanner-note muted">
+        ⚠️ Cheap options expiring in ≤3 days are high-risk lottery plays — they're
+        cheap <em>because</em> they usually expire worthless. <strong>Probability of
+        profit (POP)</strong> is the model-estimated chance the trade finishes in the
+        money; treat anything with a big "potential return" and low POP as a long shot.
+      </div>
+      <div id="scan-meta" class="muted"></div>
+      <div class="table-scroll">
+        <table id="scan-table">
+          <thead>
+            <tr>
+              <th>Type</th><th>Strike</th><th>Exp</th><th>DTE</th>
+              <th>Cost</th><th>POP</th><th>Success</th><th>Potential</th>
+              <th>BE move</th><th>IV</th><th>Score</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
     <div class="grid">
       <section class="panel">
         <div class="panel-head">

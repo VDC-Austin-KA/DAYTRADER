@@ -177,6 +177,76 @@ async function loadTrades() {
     : `<tr><td colspan="7" class="muted">No trades yet.</td></tr>`;
 }
 
+// --- Opportunity scanner ---
+function popColor(p) {
+  if (p >= 0.45) return "var(--green)";
+  if (p >= 0.25) return "var(--yellow)";
+  return "var(--red)";
+}
+
+async function runScan() {
+  const symbol = ($("#scan-symbol").value || "SPY").trim().toUpperCase();
+  const side = $("#scan-side").value;
+  const dte = $("#scan-dte").value;
+  const premium = $("#scan-premium").value;
+  const cost = $("#scan-cost").value;
+  const meta = $("#scan-meta");
+  const tb = $("#scan-table tbody");
+  meta.innerHTML = `<span class="spinner"></span> Scanning ${symbol}…`;
+  tb.innerHTML = "";
+  try {
+    const q = `max_dte=${dte}&max_premium=${premium}&max_cost=${cost}&side=${side}`;
+    const r = await api(`/api/opportunities/${symbol}?${q}`);
+    const modelNote = r.model_trained
+      ? `model lean included (p=${r.model_prob})`
+      : `⚠️ no ML model trained for ${symbol} — ranking on probability of profit only. Train it for a directional edge.`;
+    meta.innerHTML = `${symbol} @ $${r.underlying} · ${r.count} contracts under the filters · showing top ${r.opportunities.length} · ${modelNote}`;
+    if (!r.opportunities.length) {
+      tb.innerHTML = `<tr><td colspan="12" class="muted">No contracts matched. Try raising Max DTE or Max cost.</td></tr>`;
+      return;
+    }
+    tb.innerHTML = r.opportunities.map(o => {
+      const pop = (o.prob_profit * 100).toFixed(1);
+      const succ = (o.success * 100).toFixed(1);
+      const pot = (o.potential_return * 100).toFixed(0);
+      return `<tr>
+        <td><span class="pill ${o.option_type === 'call' ? 'bullish' : 'bearish'}">${o.option_type}</span></td>
+        <td>$${o.strike}</td><td>${o.expiry}</td><td>${o.dte}</td>
+        <td>$${o.cost.toFixed(0)}</td>
+        <td style="color:${popColor(o.prob_profit)}">${pop}%</td>
+        <td>${succ}%</td>
+        <td class="pos">+${pot}%</td>
+        <td>${o.breakeven_move_pct}%</td>
+        <td>${(o.iv * 100).toFixed(0)}%</td>
+        <td>${o.score.toFixed(2)}</td>
+        <td><button class="btn sm" onclick='buyOpportunity(${JSON.stringify(o)})'>Buy 1</button></td>
+      </tr>`;
+    }).join("");
+  } catch (e) {
+    meta.textContent = "";
+    tb.innerHTML = `<tr><td colspan="12" class="neg">${e.message}</td></tr>`;
+  }
+}
+
+async function buyOpportunity(o) {
+  try {
+    const r = await api("/api/trade", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        symbol: o.symbol, option_type: o.option_type,
+        contract_symbol: o.contract_symbol, strike: o.strike,
+        expiry: o.expiry, quantity: 1, price: o.mid,
+        note: `scanner POP ${(o.prob_profit * 100).toFixed(0)}%`,
+      }),
+    });
+    toast(r.message);
+    loadSummary(); loadTrades();
+  } catch (e) { toast(e.message, true); }
+}
+
+$("#scan-btn").addEventListener("click", runScan);
+$("#scan-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") runScan(); });
+
 // --- Data-source status banner ---
 async function checkDataSource() {
   const banner = $("#datasource-banner");

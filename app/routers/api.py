@@ -122,6 +122,32 @@ def one_signal(symbol: str, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/opportunities/{symbol}")
+def opportunities(
+    symbol: str,
+    max_dte: int = 3,
+    min_dte: int = 0,
+    max_premium: float = 1.00,
+    max_cost: float = 100.0,
+    side: str = "both",
+    limit: int = 25,
+):
+    """Rank cheap, short-dated options for a ticker by success x potential return."""
+    if not settings.has_data_source:
+        raise HTTPException(400, "No market-data source configured (set TRADIER_TOKEN).")
+    if side not in ("both", "call", "put"):
+        raise HTTPException(422, "side must be both/call/put")
+    from ..trading import opportunities as opp
+
+    result = opp.scan(
+        symbol.upper(), max_dte=max_dte, min_dte=min_dte,
+        max_premium=max_premium, max_cost=max_cost, side=side, limit=limit,
+    )
+    if result.get("error"):
+        raise HTTPException(404, result["error"])
+    return result
+
+
 @router.get("/options/{symbol}")
 def scan_options(symbol: str, direction: str = "call"):
     pick = options.select_contract(symbol.upper(), direction)

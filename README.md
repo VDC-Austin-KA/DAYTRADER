@@ -45,6 +45,7 @@ reliably from cloud hosts like Railway.
 | **Model** | `GradientBoostingClassifier` per symbol, predicting whether the next *N*-day return clears a target move; time-ordered train/validation split |
 | **Signals** | Model probability → bullish/bearish/neutral bias → recommended **call/put** contract |
 | **Options filter** | Only contracts with **1 ≤ DTE ≤ 30**, near-the-money, ranked by open interest / volume / spread |
+| **Opportunity scanner** | Per-ticker scan of **cheap ≤3-DTE options** (< $1.00 / < $100), ranked by **probability of profit × potential return**, with a Black-Scholes POP so the risk is visible |
 | **Paper trading** | Cash-tracked portfolio, open/close positions, mark-to-market, realized & unrealized P&L |
 | **Scheduler** | Background signal refresh + weekly retrain (APScheduler) |
 | **Frontend** | Single-page dashboard with Chart.js price charts, signals table, positions, model metrics, trade log |
@@ -108,7 +109,8 @@ That's it — the app starts, creates its tables, trains models on first boot
 | POST | `/api/signals/refresh` | Regenerate all signals |
 | GET | `/api/signals` | Cached signals |
 | GET | `/api/signal/{symbol}` | Live signal for one symbol |
-| GET | `/api/options/{symbol}?direction=call` | Scan short-dated chain |
+| GET | `/api/opportunities/{symbol}` | **Rank cheap short-dated options** (params: `max_dte`, `max_premium`, `max_cost`, `side`, `limit`) |
+| GET | `/api/options/{symbol}?direction=call` | Scan short-dated chain (single best pick) |
 | GET | `/api/portfolio` | Summary + open positions |
 | POST | `/api/trade` | Open a paper position |
 | POST | `/api/close` | Close a position |

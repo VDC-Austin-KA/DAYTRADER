@@ -7,7 +7,7 @@ env/
 .env
 *.sqlite3
 *.db
-models_store/*.joblib
+models_store/
 .DS_Store
 .pytest_cache/
 *.log

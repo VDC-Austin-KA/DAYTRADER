@@ -14,3 +14,5 @@ pydantic==2.7.4
 pydantic-settings==2.3.4
 python-dotenv==1.0.1
 requests==2.32.3
+# moomoo OpenAPI SDK — only exercised when PREDICTION_TRADE_MODE=live.
+moomoo-api>=9.0

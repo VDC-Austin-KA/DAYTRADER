@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..data import market_data as md
 from ..database import get_db
-from ..models import ModelMeta, Signal
+from ..models import ModelMeta, PredictionTrade, Signal
+from ..prediction import bot as prediction_bot
+from ..prediction import risk as prediction_risk
 from ..schemas import CloseRequest, TradeRequest, TrainRequest
 from ..trading import options, paper, signals
 from ..training import train_universe
@@ -247,6 +249,78 @@ def close(req: CloseRequest, db: Session = Depends(get_db)):
     if not ok:
         raise HTTPException(400, msg)
     return {"message": msg}
+
+
+# --- BTC hourly prediction-market bot ---
+
+@router.get("/prediction/status")
+def prediction_status(db: Session = Depends(get_db)):
+    from datetime import datetime
+
+    state = prediction_bot.get_state(db)
+    return {
+        "enabled": settings.prediction_enabled,
+        "mode": settings.prediction_trade_mode,
+        "paused": bool(state.paused),
+        "reason": state.reason,
+        "bankroll": round(prediction_risk.current_bankroll(db), 2),
+        "today_pnl": round(prediction_risk.today_realized_pnl(db, datetime.utcnow()), 2),
+        "open_positions": len(prediction_risk.open_positions(db)),
+        "limits": {
+            "min_edge": settings.prediction_min_edge,
+            "max_stake_usd": settings.prediction_max_stake_usd,
+            "max_daily_loss": settings.prediction_max_daily_loss,
+            "max_open": settings.prediction_max_open,
+        },
+    }
+
+
+@router.get("/prediction/trades")
+def prediction_trades(limit: int = 100, db: Session = Depends(get_db)):
+    rows = (
+        db.query(PredictionTrade)
+        .order_by(PredictionTrade.opened_at.desc())
+        .limit(min(limit, 500))
+        .all()
+    )
+    return [
+        {
+            "ticker": r.ticker,
+            "side": r.side,
+            "strike": r.strike,
+            "close_time": r.close_time.isoformat(),
+            "probability": r.probability,
+            "entry_price": r.entry_price,
+            "quantity": r.quantity,
+            "stake": r.stake,
+            "mode": r.mode,
+            "status": r.status,
+            "result": r.result,
+            "pnl": r.pnl,
+            "settlement_price": r.settlement_price,
+            "opened_at": r.opened_at.isoformat(),
+            "rationale": r.rationale,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/prediction/pause")
+def prediction_pause(db: Session = Depends(get_db)):
+    prediction_bot.set_paused(db, True, "paused via API")
+    return {"paused": True}
+
+
+@router.post("/prediction/resume")
+def prediction_resume(db: Session = Depends(get_db)):
+    prediction_bot.set_paused(db, False, "")
+    return {"paused": False}
+
+
+@router.post("/prediction/run")
+def prediction_run_once():
+    """Trigger one decision cycle immediately (debug/ops helper)."""
+    return prediction_bot.run_cycle()
 
 
 @router.get("/trades")

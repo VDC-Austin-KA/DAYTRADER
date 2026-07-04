@@ -50,6 +50,40 @@ reliably from cloud hosts like Railway.
 | **Scheduler** | Background signal refresh + weekly retrain (APScheduler) |
 | **Frontend** | Single-page dashboard with Chart.js price charts, signals table, positions, model metrics, trade log |
 
+## 🤖 BTC hourly prediction-market bot
+
+An autonomous bot (in `app/prediction/`) that trades **BTC hourly
+prediction-market contracts** — the moomoo prediction markets, which are
+Kalshi event contracts (series `KXBTCD`, "Bitcoin above $X at the hour").
+Every cycle (default 60 s) it:
+
+1. Settles any due positions against the BTC index price at the hour boundary.
+2. Runs the risk gates: max open positions, max daily loss, consecutive-loss
+   cooldown, pause switch.
+3. Fetches the BTC spot (Coinbase public API, keyless) and recent 1-minute
+   volatility/momentum, then computes a closed-form probability that the
+   nearest-strike contract settles YES.
+4. Compares that probability with the market-implied one (the ask) and, when
+   the edge clears `PREDICTION_MIN_EDGE`, buys YES or NO sized by capped
+   fractional Kelly.
+
+Execution modes (`PREDICTION_TRADE_MODE`):
+
+- **`paper`** (default) — fills simulated locally at the quoted ask and
+  settled against the real BTC index. No orders leave the app.
+- **`live`** — orders route through the **moomoo OpenD gateway** using the
+  `MOOMOO_*` environment variables (host/port, trade password, account). If
+  the gateway is unreachable or misconfigured the bot logs an error and falls
+  back to paper rather than crashing. Note: moomoo's published OpenAPI does
+  not yet document event-contract order support — keep `MOOMOO_CODE_PREFIX`
+  and `MOOMOO_TRD_ENV=SIMULATE` until you have verified order routing against
+  your account.
+
+Ops endpoints: `GET /api/prediction/status`, `GET /api/prediction/trades`,
+`POST /api/prediction/pause|resume|run`. All strategy/risk knobs are env vars
+(see `.env.example`). State lives in Postgres, so restarts/redeploys are safe
+and a tripped daily-loss stop cannot be wiped by a restart.
+
 ## Architecture
 
 ```
@@ -61,9 +95,16 @@ app/
 ├── schemas.py         Pydantic request/response models
 ├── training.py        Train orchestration + metric persistence
 ├── scheduler.py       APScheduler jobs
-├── data/market_data.py   yfinance wrapper with TTL caching
+├── data/market_data.py   Tradier client with TTL caching
 ├── ml/features.py     Technical-indicator feature engineering
 ├── ml/model.py        Train / persist / predict
+├── prediction/        BTC hourly prediction-market bot
+│   ├── bot.py           decision cycle: settle → gate → estimate → trade
+│   ├── model.py         closed-form hourly direction probability
+│   ├── markets.py       contract discovery/quotes (Kalshi public API)
+│   ├── execution.py     paper + moomoo OpenD executors
+│   ├── risk.py          stops, daily loss limit, Kelly sizing
+│   └── data.py          BTC spot/1-minute candles (Coinbase public API)
 ├── trading/options.py Short-dated option-chain scanner
 ├── trading/signals.py Model + scanner -> signal
 ├── trading/paper.py   Paper-trading engine

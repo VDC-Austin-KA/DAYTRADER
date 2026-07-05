@@ -127,7 +127,8 @@ class Settings(BaseSettings):
     moomoo_opend_host: str = os.getenv("MOOMOO_OPEND_HOST", "")
     moomoo_opend_port: int = int(os.getenv("MOOMOO_OPEND_PORT", "11111"))
     moomoo_trd_env: str = os.getenv("MOOMOO_TRD_ENV", "SIMULATE").upper()
-    moomoo_trade_password: str = os.getenv("MOOMOO_TRADE_PASSWORD", "")
+    # No trade password here on purpose: per moomoo's OpenAPI security policy,
+    # trading is unlocked manually in the OpenD GUI, never via the SDK.
     moomoo_security_firm: str = os.getenv("MOOMOO_SECURITY_FIRM", "FUTUINC")
     moomoo_acc_id: int = int(os.getenv("MOOMOO_ACC_ID", "0"))
     # Prefix used to build the broker symbol from the Kalshi market ticker.

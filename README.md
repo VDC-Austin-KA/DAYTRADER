@@ -72,12 +72,36 @@ Execution modes (`PREDICTION_TRADE_MODE`):
 - **`paper`** (default) — fills simulated locally at the quoted ask and
   settled against the real BTC index. No orders leave the app.
 - **`live`** — orders route through the **moomoo OpenD gateway** using the
-  `MOOMOO_*` environment variables (host/port, trade password, account). If
-  the gateway is unreachable or misconfigured the bot logs an error and falls
-  back to paper rather than crashing. Note: moomoo's published OpenAPI does
-  not yet document event-contract order support — keep `MOOMOO_CODE_PREFIX`
-  and `MOOMOO_TRD_ENV=SIMULATE` until you have verified order routing against
-  your account.
+  `MOOMOO_*` environment variables (host/port, account, trade environment).
+  If the gateway is unreachable or misconfigured the bot logs an error and
+  falls back to paper rather than crashing (order attempts are hard-capped at
+  30 s so a dead gateway can never wedge the loop). Note: moomoo's published
+  OpenAPI does not yet document event-contract order support — keep
+  `MOOMOO_CODE_PREFIX` and `MOOMOO_TRD_ENV=SIMULATE` until you have verified
+  order routing against your account.
+
+### Connecting moomoo OpenD (for live mode)
+
+moomoo's official AI setup installs two Claude skills — `install-moomoo-opend`
+(gateway installer) and `moomooapi` (market data & trading) — via the
+[one-click guide](https://openapi.moomoo.com/moomoo-api-doc/en/intro/ai.html)
+(skills package: `https://openapi.moomoo.com/skills/opend-skills.zip`).
+
+OpenD itself has two hard, by-design manual gates that no automation can (or
+should) bypass:
+
+1. **Login** — the OpenD GUI requires your moomoo account credentials (and a
+   captcha/device verification) after every fresh start.
+2. **Trade unlock** — trading must be unlocked by hand in the OpenD GUI;
+   moomoo's security policy forbids SDK-based `unlock_trade`, and this app
+   deliberately contains no such call.
+
+Because Railway containers are ephemeral and headless, **run OpenD on a
+machine you control** (desktop, home server, or a VPS with a desktop/VNC):
+log in, unlock trading, set the listen address so the gateway is reachable by
+the app (secure the network path — VPN/tailnet, never the open internet),
+then set `MOOMOO_OPEND_HOST`/`MOOMOO_OPEND_PORT` on the Railway service. The
+bot picks it up on the next cycle; until then it runs in paper mode.
 
 Ops endpoints: `GET /api/prediction/status`, `GET /api/prediction/trades`,
 `POST /api/prediction/pause|resume|run`. All strategy/risk knobs are env vars

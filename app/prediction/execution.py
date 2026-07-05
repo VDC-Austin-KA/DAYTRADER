@@ -58,6 +58,9 @@ class MoomooExecutor:
 
     mode = "live"
     _MIN_ORDER_INTERVAL = 3.0  # seconds between orders
+    # Hard ceiling on one order attempt: the SDK retries a dead gateway
+    # forever, which would otherwise wedge the scheduler cycle permanently.
+    _ORDER_TIMEOUT = 30.0
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -70,12 +73,41 @@ class MoomooExecutor:
     def place_order(
         self, ticker: str, side: str, quantity: int, limit_price: float
     ) -> ExecutionResult:
+        with self._lock:
+            wait = self._MIN_ORDER_INTERVAL - (time.time() - self._last_order_ts)
+            if wait > 0:
+                time.sleep(wait)
+            self._last_order_ts = time.time()
+
+        # Run the SDK call on a daemon thread with a hard timeout.
+        results: list[ExecutionResult] = []
+        worker = threading.Thread(
+            target=lambda: results.append(
+                self._place_order(ticker, side, quantity, limit_price)
+            ),
+            daemon=True,
+        )
+        worker.start()
+        worker.join(self._ORDER_TIMEOUT)
+        if not results:
+            return ExecutionResult(
+                ok=False,
+                mode=self.mode,
+                message=f"OpenD did not respond within {self._ORDER_TIMEOUT:.0f}s "
+                        "(is the gateway running and logged in?)",
+            )
+        return results[0]
+
+    def _place_order(
+        self, ticker: str, side: str, quantity: int, limit_price: float
+    ) -> ExecutionResult:
         try:
             from moomoo import (  # type: ignore[import-not-found]
                 RET_OK,
                 OpenSecTradeContext,
                 OrderType,
                 SecurityFirm,
+                SysConfig,
                 TrdEnv,
                 TrdMarket,
                 TrdSide,
@@ -84,12 +116,6 @@ class MoomooExecutor:
             return ExecutionResult(
                 ok=False, mode=self.mode, message="moomoo-api package not installed"
             )
-
-        with self._lock:
-            wait = self._MIN_ORDER_INTERVAL - (time.time() - self._last_order_ts)
-            if wait > 0:
-                time.sleep(wait)
-            self._last_order_ts = time.time()
 
         code = f"{settings.moomoo_code_prefix}{ticker}"
         # A YES position is a buy of the YES contract; a NO position is a buy
@@ -101,18 +127,17 @@ class MoomooExecutor:
 
         ctx = None
         try:
+            # SDK threads must not keep the process alive if the gateway hangs.
+            SysConfig.set_all_thread_daemon(True)
             ctx = OpenSecTradeContext(
                 filter_trdmarket=TrdMarket.US,
                 host=settings.moomoo_opend_host,
                 port=settings.moomoo_opend_port,
                 security_firm=firm,
             )
-            if settings.moomoo_trade_password and trd_env == TrdEnv.REAL:
-                ret, data = ctx.unlock_trade(password=settings.moomoo_trade_password)
-                if ret != RET_OK:
-                    return ExecutionResult(
-                        ok=False, mode=self.mode, message=f"unlock_trade failed: {data}"
-                    )
+            # NOTE: trading is NOT unlocked via the SDK. Per moomoo's OpenAPI
+            # security policy, unlock trading manually in the OpenD GUI; live
+            # orders fail until that is done.
             kwargs = dict(
                 price=price,
                 qty=quantity,

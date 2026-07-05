@@ -71,6 +71,68 @@ class Settings(BaseSettings):
 
     model_store_dir: str = os.getenv("MODEL_STORE_DIR", "models_store")
 
+    # --- BTC hourly prediction-market bot ---
+    # Master switch for the autonomous bot loop.
+    prediction_enabled: bool = (
+        os.getenv("PREDICTION_BOT_ENABLED", "true").lower() == "true"
+    )
+    # "paper" simulates fills locally; "live" routes orders through moomoo OpenD.
+    prediction_trade_mode: str = os.getenv("PREDICTION_TRADE_MODE", "paper").lower()
+    prediction_cycle_seconds: int = int(os.getenv("PREDICTION_CYCLE_SECONDS", "60"))
+    # Kalshi powers moomoo's prediction markets; its public market-data API is
+    # keyless and is used to discover/quote the BTC hourly contracts.
+    kalshi_base_url: str = os.getenv(
+        "KALSHI_BASE_URL", "https://api.elections.kalshi.com/trade-api/v2"
+    )
+    prediction_series_ticker: str = os.getenv("PREDICTION_SERIES_TICKER", "KXBTCD")
+
+    # Strategy knobs.
+    prediction_min_edge: float = float(os.getenv("PREDICTION_MIN_EDGE", "0.06"))
+    prediction_momentum_coeff: float = float(
+        os.getenv("PREDICTION_MOMENTUM_COEFF", "0.35")
+    )
+    prediction_min_minutes_left: float = float(
+        os.getenv("PREDICTION_MIN_MINUTES_LEFT", "8")
+    )
+    prediction_max_minutes_left: float = float(
+        os.getenv("PREDICTION_MAX_MINUTES_LEFT", "55")
+    )
+    prediction_min_price_cents: int = int(os.getenv("PREDICTION_MIN_PRICE_CENTS", "10"))
+    prediction_max_price_cents: int = int(os.getenv("PREDICTION_MAX_PRICE_CENTS", "90"))
+
+    # Risk management.
+    prediction_bankroll: float = float(os.getenv("PREDICTION_BANKROLL", "1000"))
+    prediction_kelly_fraction: float = float(
+        os.getenv("PREDICTION_KELLY_FRACTION", "0.25")
+    )
+    prediction_max_stake_usd: float = float(
+        os.getenv("PREDICTION_MAX_STAKE_USD", "100")
+    )
+    prediction_max_stake_pct: float = float(
+        os.getenv("PREDICTION_MAX_STAKE_PCT", "0.10")
+    )
+    prediction_max_daily_loss: float = float(
+        os.getenv("PREDICTION_MAX_DAILY_LOSS", "150")
+    )
+    prediction_max_open: int = int(os.getenv("PREDICTION_MAX_OPEN", "1"))
+    prediction_max_consecutive_losses: int = int(
+        os.getenv("PREDICTION_MAX_CONSECUTIVE_LOSSES", "4")
+    )
+    prediction_cooldown_minutes: int = int(
+        os.getenv("PREDICTION_COOLDOWN_MINUTES", "60")
+    )
+
+    # moomoo OpenD gateway (required only for live mode). Credentials/config are
+    # injected by Railway service variables; never hard-code them.
+    moomoo_opend_host: str = os.getenv("MOOMOO_OPEND_HOST", "")
+    moomoo_opend_port: int = int(os.getenv("MOOMOO_OPEND_PORT", "11111"))
+    moomoo_trd_env: str = os.getenv("MOOMOO_TRD_ENV", "SIMULATE").upper()
+    moomoo_trade_password: str = os.getenv("MOOMOO_TRADE_PASSWORD", "")
+    moomoo_security_firm: str = os.getenv("MOOMOO_SECURITY_FIRM", "FUTUINC")
+    moomoo_acc_id: int = int(os.getenv("MOOMOO_ACC_ID", "0"))
+    # Prefix used to build the broker symbol from the Kalshi market ticker.
+    moomoo_code_prefix: str = os.getenv("MOOMOO_CODE_PREFIX", "US.")
+
     @property
     def sqlalchemy_url(self) -> str:
         url = self.database_url

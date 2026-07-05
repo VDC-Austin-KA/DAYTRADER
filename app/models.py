@@ -115,6 +115,46 @@ class Signal(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class PredictionTrade(Base):
+    """A BTC hourly prediction-market contract trade placed by the bot."""
+
+    __tablename__ = "prediction_trades"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(60), index=True)
+    series: Mapped[str] = mapped_column(String(20), default="")
+    side: Mapped[str] = mapped_column(String(3))  # yes / no
+    strike: Mapped[float] = mapped_column(Float, default=0.0)
+    close_time: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+    probability: Mapped[float] = mapped_column(Float)  # model P(side wins)
+    entry_price: Mapped[float] = mapped_column(Float)  # dollars per contract
+    quantity: Mapped[int] = mapped_column(Integer)
+    stake: Mapped[float] = mapped_column(Float, default=0.0)
+
+    mode: Mapped[str] = mapped_column(String(6), default="paper")  # paper / live
+    order_id: Mapped[str] = mapped_column(String(80), default="")
+    status: Mapped[str] = mapped_column(String(10), default="open")  # open/settled/error
+    result: Mapped[str] = mapped_column(String(6), default="")  # win / loss / void
+    pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    settlement_price: Mapped[float] = mapped_column(Float, default=0.0)  # BTC index
+
+    rationale: Mapped[str] = mapped_column(Text, default="")
+    opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class PredictionBotState(Base):
+    """Singleton row with the bot's operator-facing state."""
+
+    __tablename__ = "prediction_bot_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    paused: Mapped[int] = mapped_column(Integer, default=0)  # 0/1
+    reason: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ModelMeta(Base):
     """Tracks the latest trained model's metrics per symbol."""
 

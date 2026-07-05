@@ -9,6 +9,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from .config import settings
 from .database import SessionLocal
 from .models import ModelMeta
+from .prediction import bot as prediction_bot
 from .trading import paper, signals
 from .training import train_universe
 
@@ -65,6 +66,21 @@ def start_scheduler() -> None:
         replace_existing=True,
         max_instances=1,
     )
+    if settings.prediction_enabled:
+        _scheduler.add_job(
+            prediction_bot.run_cycle,
+            "interval",
+            seconds=settings.prediction_cycle_seconds,
+            id="prediction_bot",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        log.info(
+            "prediction bot scheduled every %ss (mode=%s)",
+            settings.prediction_cycle_seconds,
+            settings.prediction_trade_mode,
+        )
     # Weekly retrain (Sunday 06:00 UTC).
     _scheduler.add_job(
         lambda: train_universe(SessionLocal()),

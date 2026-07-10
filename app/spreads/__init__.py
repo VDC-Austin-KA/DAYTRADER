@@ -2,9 +2,9 @@
 
 Asynchronous pipeline:
 
-    Polygon.io OPRA WebSocket ──> asyncio.Queue ──> ChainStore (numpy)
+    moomoo OpenD push (QUOTE + ORDER_BOOK) ──> asyncio.Queue ──> ChainStore (numpy)
                                                         │
-    Polygon REST snapshots (greeks/IV) ─────────────────┤
+    ContractDiscovery (chain scan + spot) ──────────────┤
                                                         ▼
     IVRankTracker ──> SpreadScanner ──> MoomooSpreadExecutor
                                                         │

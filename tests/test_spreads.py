@@ -33,7 +33,14 @@ EXPIRY = TODAY + timedelta(days=1)
 
 
 def make_config(**overrides) -> SpreadsConfig:
-    return SpreadsConfig(**overrides)
+    """SpreadsConfig() rejects bare field-name kwargs by design (see the
+    populate_by_name comment in config.py) — translate friendly snake_case
+    overrides to each field's validation_alias before constructing."""
+    aliased = {
+        SpreadsConfig.model_fields[key].validation_alias or key: value
+        for key, value in overrides.items()
+    }
+    return SpreadsConfig(**aliased)
 
 
 def contract(strike: float, right: Right = Right.PUT) -> OptionContract:
@@ -68,7 +75,6 @@ def test_occ_round_trip_and_broker_codes():
     c = OptionContract.from_occ("O:SPY260711P00614000")
     assert c == contract(614.0)
     assert c.occ_symbol == "SPY260711P00614000"
-    assert c.polygon_ticker == "O:SPY260711P00614000"
     assert c.moomoo_code == "US.SPY260711P614000"
     assert c.dte(TODAY) == 1
 
@@ -76,6 +82,21 @@ def test_occ_round_trip_and_broker_codes():
 def test_occ_rejects_garbage():
     with pytest.raises(ValueError):
         OptionContract.from_occ("SPY-not-an-option")
+
+
+def test_moomoo_code_round_trip():
+    c = OptionContract.from_moomoo_code("US.SPY260711P614000")
+    assert c == contract(614.0)
+    assert c.moomoo_code == "US.SPY260711P614000"
+    # Sub-strikes (e.g. 1.5) survive without zero-padding, unlike OCC.
+    frac = OptionContract.from_moomoo_code("US.SPY260711C1500")
+    assert frac.strike == pytest.approx(1.5)
+    assert frac.moomoo_code == "US.SPY260711C1500"
+
+
+def test_moomoo_code_rejects_garbage():
+    with pytest.raises(ValueError):
+        OptionContract.from_moomoo_code("not-a-code")
 
 
 # --------------------------------------------------------------------------- #

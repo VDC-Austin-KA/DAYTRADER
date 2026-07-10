@@ -20,6 +20,9 @@ class SpreadKind(str, Enum):
 
 # OCC option symbol: ROOT (padded) + YYMMDD + C/P + strike*1000 (8 digits).
 _OCC_RE = re.compile(r"^(?P<root>[A-Z.]{1,6})(?P<exp>\d{6})(?P<right>[CP])(?P<strike>\d{8})$")
+# moomoo US option code: same fields as OCC but the strike (x1000) is NOT
+# zero-padded, e.g. "SPY260713C620000" (strike 620) or "SPY260713C1500" (1.5).
+_MOOMOO_RE = re.compile(r"^(?P<root>[A-Z.]{1,6})(?P<exp>\d{6})(?P<right>[CP])(?P<strike>\d+)$")
 
 
 @dataclass(frozen=True)
@@ -39,11 +42,6 @@ class OptionContract:
         )
 
     @property
-    def polygon_ticker(self) -> str:
-        """Polygon prefixes OCC symbols with ``O:``."""
-        return f"O:{self.occ_symbol}"
-
-    @property
     def moomoo_code(self) -> str:
         """moomoo US option code, e.g. ``US.SPY260713C620000``.
 
@@ -60,6 +58,20 @@ class OptionContract:
         m = _OCC_RE.match(sym)
         if not m:
             raise ValueError(f"not an OCC option symbol: {symbol!r}")
+        exp = m.group("exp")
+        return cls(
+            root=m.group("root"),
+            expiry=date(2000 + int(exp[:2]), int(exp[2:4]), int(exp[4:6])),
+            right=Right(m.group("right")),
+            strike=int(m.group("strike")) / 1000.0,
+        )
+
+    @classmethod
+    def from_moomoo_code(cls, code: str) -> "OptionContract":
+        sym = code.upper().removeprefix("US.").replace(" ", "")
+        m = _MOOMOO_RE.match(sym)
+        if not m:
+            raise ValueError(f"not a moomoo option code: {code!r}")
         exp = m.group("exp")
         return cls(
             root=m.group("root"),

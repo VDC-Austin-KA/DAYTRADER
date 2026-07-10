@@ -129,6 +129,10 @@ python -m app.spreads        # paper mode by default; needs MOOMOO_OPEND_HOST re
 - **IV-rank regime switching** — ATM IV is sampled into a rolling window
   (persisted across restarts). IV rank > 70 scans for **credit** spreads;
   IV rank < 20 scans for **debit** spreads; in between it stands down.
+  Cold starts pre-seed the window from CBOE short-dated vol indices
+  (`^VIX1D`, free via Yahoo) so day one trades instead of warming up;
+  live chain samples then take over (`python -m app.spreads.seed_iv`
+  re-seeds manually).
 - **Delta-based strike selection** — short leg at the ~0.20 |delta| strike,
   wing 1-5 strikes away (configurable), liquidity and credit/width filters.
 - **Guarded execution via moomoo OpenD** — orders go out only if the freshest

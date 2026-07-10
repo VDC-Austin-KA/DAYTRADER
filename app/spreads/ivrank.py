@@ -56,6 +56,15 @@ class IVRankTracker:
                 self._save()
                 self._last_saved = now
 
+    @property
+    def sample_count(self) -> int:
+        return len(self._samples)
+
+    def reload(self) -> None:
+        """Re-read the history file (after an external seeding run)."""
+        self._samples = []
+        self._load()
+
     def rank(self, current_iv: float) -> float | None:
         """IV rank 0-100, or None until the window has enough texture."""
         if not current_iv or current_iv != current_iv:

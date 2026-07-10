@@ -95,6 +95,10 @@ class SpreadsConfig(BaseSettings):
     scan_interval_seconds: float = Field(
         default=5.0, validation_alias="SPREADS_SCAN_INTERVAL"
     )
+    # On a cold start (too few samples to rank), warm the window from CBOE
+    # short-dated vol indices (^VIX1D et al.) so the bot can trade on day one
+    # instead of standing down for an hour collecting samples.
+    auto_seed_iv: bool = Field(default=True, validation_alias="SPREADS_AUTO_SEED_IV")
 
     # --- Strike selection ---
     # Short leg targets this absolute delta (0.20 = ~80% POP short strike).

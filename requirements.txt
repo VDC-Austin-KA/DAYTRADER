@@ -16,3 +16,5 @@ python-dotenv==1.0.1
 requests==2.32.3
 # moomoo OpenAPI SDK — only exercised when PREDICTION_TRADE_MODE=live.
 moomoo-api>=9.0
+# Polygon.io OPRA WebSocket stream for the vertical-spread bot (app/spreads).
+websockets>=12.0

@@ -108,6 +108,66 @@ Ops endpoints: `GET /api/prediction/status`, `GET /api/prediction/trades`,
 (see `.env.example`). State lives in Postgres, so restarts/redeploys are safe
 and a tripped daily-loss stop cannot be wiped by a restart.
 
+## ⚡ Intraday 0-3 DTE vertical-spread bot (`app/spreads`)
+
+A standalone asynchronous bot that trades defined-risk options verticals
+(debit/credit spreads) intraday off a real-time OPRA feed:
+
+```bash
+python -m app.spreads        # paper mode by default; needs POLYGON_API_KEY
+```
+
+- **Low-latency ingestion** — Polygon.io options WebSocket streams NBBO quotes
+  into a bounded `asyncio.Queue` (drop-oldest backpressure, the socket reader
+  never blocks) and into an in-memory numpy options chain (bid/ask/mid, delta,
+  gamma, IV per strike/right/expiry). Greeks and IV refresh continuously from
+  Polygon's snapshot endpoint, since OPRA streams quotes, not greeks.
+- **IV-rank regime switching** — ATM IV is sampled into a rolling window
+  (persisted across restarts). IV rank > 70 scans for **credit** spreads;
+  IV rank < 20 scans for **debit** spreads; in between it stands down.
+- **Delta-based strike selection** — short leg at the ~0.20 |delta| strike,
+  wing 1-5 strikes away (configurable), liquidity and credit/width filters.
+- **Guarded execution via moomoo OpenD** — orders go out only if the freshest
+  WebSocket tick behind each leg is under 150ms old (order-timing guardrail);
+  limits are mid ± a tight slippage tolerance; the long leg always fills first
+  so the book never carries a naked short; live mode reuses the `MOOMOO_*`
+  gateway config (trading unlocked manually in the OpenD GUI, never via SDK).
+- **Intraday watchdog** — every 2s: per-spread hard stop at 50% of defined max
+  risk, a daily equity circuit breaker (-3% from the session open flattens
+  everything and halts), and a maintenance-margin utilisation guard fed by the
+  broker's portfolio-margin endpoint.
+
+All knobs are `SPREADS_*` env vars — see `.env.example`. Paper mode fills at
+the computed limits so the whole pipeline can be exercised without a broker.
+
+### Running the bot on Railway
+
+The bot is a separate process from the web app (the `web` Procfile entry only
+starts uvicorn). To run it deployed:
+
+1. In the Railway project: **New → Service → GitHub repo** and pick this repo
+   again (a second service on the same repo).
+2. On that service, set **Start Command** to `python -m app.spreads` (overrides
+   the `railway.json` web command; the `worker:` line in the Procfile documents
+   the same thing).
+3. Set `POLYGON_API_KEY` (and any `SPREADS_*` overrides) as service variables.
+   No healthcheck/port is needed — it's a headless worker.
+4. Leave `SPREADS_TRADE_MODE=paper` until the paper pipeline has run through
+   full sessions cleanly; then point `MOOMOO_OPEND_HOST` at your gateway and
+   flip to `live`.
+
+### Market-data research via the Massive MCP server
+
+`.mcp.json` registers [Massive](https://massive.com/docs/ai-tools/quickstart)'s
+(Polygon.io's) remote MCP server for Claude Code sessions on this repo. It is
+**not** used by the trading hot path — the bot streams the WebSocket feed
+directly because MCP is request/response with agent-loop latency — but it lets
+Claude query historical options data during development: backtesting the
+delta/wing/IV-rank parameters, pre-seeding `iv_history.json`, and post-trade
+analysis. First use requires a one-time OAuth: run `claude`, type `/mcp`,
+select **massive**, authenticate (uses your Massive/Polygon account
+entitlements).
+
 ## Architecture
 
 ```
@@ -129,6 +189,14 @@ app/
 │   ├── execution.py     paper + moomoo OpenD executors
 │   ├── risk.py          stops, daily loss limit, Kelly sizing
 │   └── data.py          BTC spot/1-minute candles (Coinbase public API)
+├── spreads/           Intraday 0-3 DTE vertical-spread bot (python -m app.spreads)
+│   ├── bot.py           task orchestration (reader/consumer/snapshots/scanner/watchdog)
+│   ├── ingest.py        Polygon OPRA WebSocket + snapshot greeks (asyncio.Queue backpressure)
+│   ├── chain.py         in-memory numpy options chain (bid/ask/delta/gamma/IV/tick ts)
+│   ├── ivrank.py        rolling IV-rank tracker (persisted)
+│   ├── scanner.py       regime switch + delta strike selection
+│   ├── execution.py     mid±slippage limits, 150ms staleness guardrail, moomoo bridge
+│   └── watchdog.py      position stops, equity/margin circuit breakers
 ├── trading/options.py Short-dated option-chain scanner
 ├── trading/signals.py Model + scanner -> signal
 ├── trading/paper.py   Paper-trading engine

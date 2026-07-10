@@ -51,6 +51,10 @@ class SpreadsConfig(BaseSettings):
     iv_history_path: str = os.getenv(
         "SPREADS_IV_HISTORY_PATH", "models_store/iv_history.json"
     )
+    # On a cold start (too few samples to rank), warm the window from CBOE
+    # short-dated vol indices (^VIX1D et al.) so the bot can trade on day one
+    # instead of standing down for an hour collecting samples.
+    auto_seed_iv: bool = os.getenv("SPREADS_AUTO_SEED_IV", "true").lower() == "true"
     scan_interval_seconds: float = float(os.getenv("SPREADS_SCAN_INTERVAL", "5"))
 
     # --- Strike selection ---

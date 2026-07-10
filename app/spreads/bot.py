@@ -49,6 +49,7 @@ class SpreadBot:
             "spread bot starting: %s, %d-%d DTE, mode=%s",
             self.cfg.underlying, self.cfg.min_dte, self.cfg.max_dte, self.cfg.trade_mode,
         )
+        await self._maybe_seed_iv_history()
         tasks = [
             asyncio.create_task(self.stream.run_reader(), name="ws-reader"),
             asyncio.create_task(self.stream.run_consumer(), name="ws-consumer"),
@@ -70,6 +71,22 @@ class SpreadBot:
             await asyncio.gather(*tasks, return_exceptions=True)
             await self.executor.close()
             log.info("spread bot stopped")
+
+    async def _maybe_seed_iv_history(self) -> None:
+        """Warm a cold IV-rank window from CBOE vol indices (best effort)."""
+        if not self.cfg.auto_seed_iv or self.iv_rank.sample_count >= 12:
+            return
+        from .seed_iv import seed
+
+        try:
+            await asyncio.to_thread(seed, self.cfg.iv_history_path)
+            self.iv_rank.reload()
+            log.info("IV-rank window pre-seeded: %d samples", self.iv_rank.sample_count)
+        except Exception as exc:
+            log.warning(
+                "IV pre-seed failed (%s); the window will warm up from live samples",
+                exc,
+            )
 
     # ------------------------------------------------------------------ #
     async def _scan_loop(self) -> None:

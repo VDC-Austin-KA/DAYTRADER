@@ -140,6 +140,34 @@ python -m app.spreads        # paper mode by default; needs POLYGON_API_KEY
 All knobs are `SPREADS_*` env vars — see `.env.example`. Paper mode fills at
 the computed limits so the whole pipeline can be exercised without a broker.
 
+### Running the bot on Railway
+
+The bot is a separate process from the web app (the `web` Procfile entry only
+starts uvicorn). To run it deployed:
+
+1. In the Railway project: **New → Service → GitHub repo** and pick this repo
+   again (a second service on the same repo).
+2. On that service, set **Start Command** to `python -m app.spreads` (overrides
+   the `railway.json` web command; the `worker:` line in the Procfile documents
+   the same thing).
+3. Set `POLYGON_API_KEY` (and any `SPREADS_*` overrides) as service variables.
+   No healthcheck/port is needed — it's a headless worker.
+4. Leave `SPREADS_TRADE_MODE=paper` until the paper pipeline has run through
+   full sessions cleanly; then point `MOOMOO_OPEND_HOST` at your gateway and
+   flip to `live`.
+
+### Market-data research via the Massive MCP server
+
+`.mcp.json` registers [Massive](https://massive.com/docs/ai-tools/quickstart)'s
+(Polygon.io's) remote MCP server for Claude Code sessions on this repo. It is
+**not** used by the trading hot path — the bot streams the WebSocket feed
+directly because MCP is request/response with agent-loop latency — but it lets
+Claude query historical options data during development: backtesting the
+delta/wing/IV-rank parameters, pre-seeding `iv_history.json`, and post-trade
+analysis. First use requires a one-time OAuth: run `claude`, type `/mcp`,
+select **massive**, authenticate (uses your Massive/Polygon account
+entitlements).
+
 ## Architecture
 
 ```

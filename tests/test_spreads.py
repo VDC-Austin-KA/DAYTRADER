@@ -33,7 +33,14 @@ EXPIRY = TODAY + timedelta(days=1)
 
 
 def make_config(**overrides) -> SpreadsConfig:
-    return SpreadsConfig(**overrides)
+    """SpreadsConfig() rejects bare field-name kwargs by design (see the
+    populate_by_name comment in config.py) — translate friendly snake_case
+    overrides to each field's validation_alias before constructing."""
+    aliased = {
+        SpreadsConfig.model_fields[key].validation_alias or key: value
+        for key, value in overrides.items()
+    }
+    return SpreadsConfig(**aliased)
 
 
 def contract(strike: float, right: Right = Right.PUT) -> OptionContract:
@@ -68,7 +75,6 @@ def test_occ_round_trip_and_broker_codes():
     c = OptionContract.from_occ("O:SPY260711P00614000")
     assert c == contract(614.0)
     assert c.occ_symbol == "SPY260711P00614000"
-    assert c.polygon_ticker == "O:SPY260711P00614000"
     assert c.moomoo_code == "US.SPY260711P614000"
     assert c.dte(TODAY) == 1
 
@@ -76,6 +82,21 @@ def test_occ_round_trip_and_broker_codes():
 def test_occ_rejects_garbage():
     with pytest.raises(ValueError):
         OptionContract.from_occ("SPY-not-an-option")
+
+
+def test_moomoo_code_round_trip():
+    c = OptionContract.from_moomoo_code("US.SPY260711P614000")
+    assert c == contract(614.0)
+    assert c.moomoo_code == "US.SPY260711P614000"
+    # Sub-strikes (e.g. 1.5) survive without zero-padding, unlike OCC.
+    frac = OptionContract.from_moomoo_code("US.SPY260711C1500")
+    assert frac.strike == pytest.approx(1.5)
+    assert frac.moomoo_code == "US.SPY260711C1500"
+
+
+def test_moomoo_code_rejects_garbage():
+    with pytest.raises(ValueError):
+        OptionContract.from_moomoo_code("not-a-code")
 
 
 # --------------------------------------------------------------------------- #
@@ -277,3 +298,69 @@ def test_iv_rank_ignores_nan_marks(tmp_path):
     tracker.observe(float("nan"))
     tracker.observe(0.0)
     assert tracker._samples == []
+
+
+# --------------------------------------------------------------------------- #
+# IV history pre-seeding (network mocked)
+# --------------------------------------------------------------------------- #
+def _fake_chart_response(points: int, base_vol: float = 13.0):
+    now = int(time.time())
+    ts = [now - i * 86400 for i in range(points)][::-1]
+    closes = [base_vol + (i % 5) * 0.4 for i in range(points)]
+    return {
+        "chart": {
+            "result": [
+                {"timestamp": ts, "indicators": {"quote": [{"close": closes}]}}
+            ]
+        }
+    }
+
+
+def test_seed_writes_tracker_compatible_history(tmp_path, monkeypatch):
+    from app.spreads import seed_iv
+
+    class FakeResp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return _fake_chart_response(21)
+
+    monkeypatch.setattr(seed_iv.requests, "get", lambda *a, **k: FakeResp())
+    target = tmp_path / "iv_history.json"
+    seed_iv.seed(str(target), window_days=30)
+
+    tracker = IVRankTracker(str(target), window_days=30)
+    assert tracker.sample_count >= 12
+    # Values arrive as decimals (13.x% -> 0.13x) and produce a usable rank.
+    assert all(0.05 < v < 1.0 for _, v in tracker._samples)
+    assert tracker.rank(0.135) is not None
+
+
+def test_seed_falls_back_across_symbols(tmp_path, monkeypatch):
+    from app.spreads import seed_iv
+
+    calls = []
+
+    class FakeResp:
+        def __init__(self, sym):
+            self.sym = sym
+
+        def raise_for_status(self):
+            if self.sym == "^VIX1D":
+                raise RuntimeError("boom")
+
+        def json(self):
+            return _fake_chart_response(21)
+
+    def fake_get(url, **kwargs):
+        sym = url.rsplit("/", 1)[-1]
+        calls.append(sym)
+        return FakeResp(sym)
+
+    monkeypatch.setattr(seed_iv.requests, "get", fake_get)
+    sym, samples = seed_iv.fetch_vol_series(30)
+    assert calls[0] == "^VIX1D" and sym == "^VIX9D"
+    assert len(samples) >= 12

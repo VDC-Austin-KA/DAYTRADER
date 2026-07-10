@@ -111,34 +111,54 @@ and a tripped daily-loss stop cannot be wiped by a restart.
 ## ⚡ Intraday 0-3 DTE vertical-spread bot (`app/spreads`)
 
 A standalone asynchronous bot that trades defined-risk options verticals
-(debit/credit spreads) intraday off a real-time OPRA feed:
+(debit/credit spreads) intraday off moomoo OpenD's real-time options feed:
 
 ```bash
-python -m app.spreads        # paper mode by default; needs POLYGON_API_KEY
+python -m app.spreads        # paper mode by default; needs MOOMOO_OPEND_HOST reachable
 ```
 
-- **Low-latency ingestion** — Polygon.io options WebSocket streams NBBO quotes
-  into a bounded `asyncio.Queue` (drop-oldest backpressure, the socket reader
-  never blocks) and into an in-memory numpy options chain (bid/ask/mid, delta,
-  gamma, IV per strike/right/expiry). Greeks and IV refresh continuously from
-  Polygon's snapshot endpoint, since OPRA streams quotes, not greeks.
+- **Low-latency ingestion** — moomoo's OpenAPI SDK is synchronous/callback-based,
+  so push callbacks (`StockQuoteHandlerBase` for greeks/IV, `OrderBookHandlerBase`
+  for top-of-book bid/ask) marshal onto the event loop via
+  `loop.call_soon_threadsafe` into a bounded `asyncio.Queue` (drop-oldest
+  backpressure — the SDK's push thread never blocks). A consumer coroutine
+  drains the queue into an in-memory numpy options chain (bid/ask/mid, delta,
+  gamma, IV per strike/right/expiry). A separate discovery task re-scans the
+  chain every 15s for contracts entering/leaving the 0-3 DTE window (OpenD has
+  no "new contract" push) and subscribes anything new in throttled batches.
 - **IV-rank regime switching** — ATM IV is sampled into a rolling window
   (persisted across restarts). IV rank > 70 scans for **credit** spreads;
   IV rank < 20 scans for **debit** spreads; in between it stands down.
+  Cold starts pre-seed the window from CBOE short-dated vol indices
+  (`^VIX1D`, free via Yahoo) so day one trades instead of warming up;
+  live chain samples then take over (`python -m app.spreads.seed_iv`
+  re-seeds manually).
 - **Delta-based strike selection** — short leg at the ~0.20 |delta| strike,
   wing 1-5 strikes away (configurable), liquidity and credit/width filters.
 - **Guarded execution via moomoo OpenD** — orders go out only if the freshest
-  WebSocket tick behind each leg is under 150ms old (order-timing guardrail);
-  limits are mid ± a tight slippage tolerance; the long leg always fills first
-  so the book never carries a naked short; live mode reuses the `MOOMOO_*`
-  gateway config (trading unlocked manually in the OpenD GUI, never via SDK).
+  tick behind each leg is under 150ms old (order-timing guardrail); limits are
+  mid ± a tight slippage tolerance; the long leg always fills first so the
+  book never carries a naked short; live mode reuses the same `MOOMOO_*`
+  gateway config used for data (trading unlocked manually in the OpenD GUI,
+  never via SDK).
 - **Intraday watchdog** — every 2s: per-spread hard stop at 50% of defined max
   risk, a daily equity circuit breaker (-3% from the session open flattens
   everything and halts), and a maintenance-margin utilisation guard fed by the
   broker's portfolio-margin endpoint.
 
 All knobs are `SPREADS_*` env vars — see `.env.example`. Paper mode fills at
-the computed limits so the whole pipeline can be exercised without a broker.
+the computed limits so the whole pipeline can be exercised without placing
+real orders, but market data still requires a running, logged-in OpenD
+gateway with an options-quote-entitled moomoo account (data streams
+regardless of trade mode; only order placement needs `SPREADS_TRADE_MODE=live`
++ trading unlocked in the OpenD GUI).
+
+> Polygon.io/Massive's REST and WebSocket options endpoints were evaluated
+> first but this account's plan returns `403 NOT_AUTHORIZED` on options data
+> (confirmed on both the direct API and the MCP server below); moomoo OpenD's
+> own feed is fully entitled on this account and was used instead. See
+> "Market-data research" below for where Polygon/Massive access remains
+> useful even though it doesn't power live trading.
 
 ### Running the bot on Railway
 
@@ -150,23 +170,33 @@ starts uvicorn). To run it deployed:
 2. On that service, set **Start Command** to `python -m app.spreads` (overrides
    the `railway.json` web command; the `worker:` line in the Procfile documents
    the same thing).
-3. Set `POLYGON_API_KEY` (and any `SPREADS_*` overrides) as service variables.
-   No healthcheck/port is needed — it's a headless worker.
+3. Set `MOOMOO_OPEND_HOST`/`MOOMOO_OPEND_PORT` (and any `SPREADS_*` overrides)
+   as service variables — OpenD must be reachable from Railway (VPN/tailnet to
+   the machine running it; never expose it to the open internet). No
+   healthcheck/port is needed on this service — it's a headless worker.
 4. Leave `SPREADS_TRADE_MODE=paper` until the paper pipeline has run through
-   full sessions cleanly; then point `MOOMOO_OPEND_HOST` at your gateway and
-   flip to `live`.
+   full sessions cleanly; then flip to `live` (data streams the same way in
+   both modes — only order placement changes).
 
-### Market-data research via the Massive MCP server
+### Market-data research: Massive MCP + S3 flat files
 
-`.mcp.json` registers [Massive](https://massive.com/docs/ai-tools/quickstart)'s
-(Polygon.io's) remote MCP server for Claude Code sessions on this repo. It is
-**not** used by the trading hot path — the bot streams the WebSocket feed
-directly because MCP is request/response with agent-loop latency — but it lets
-Claude query historical options data during development: backtesting the
-delta/wing/IV-rank parameters, pre-seeding `iv_history.json`, and post-trade
-analysis. First use requires a one-time OAuth: run `claude`, type `/mcp`,
-select **massive**, authenticate (uses your Massive/Polygon account
-entitlements).
+Two separate Polygon.io/Massive access paths are wired up for research and
+backtesting during development — neither is used by the live trading path,
+which sources data from moomoo OpenD instead (see above) because this
+account's Massive plan lacks the REST/WebSocket options entitlement:
+
+- **`.mcp.json`** registers [Massive](https://massive.com/docs/ai-tools/quickstart)'s
+  remote MCP server for Claude Code sessions on this repo — lets Claude query
+  market data conversationally. First use requires a one-time OAuth: run
+  `claude`, type `/mcp`, select **massive**, authenticate.
+- **S3 flat files** (`MASSIVE_S3_*` in `.env`, gitignored) grant bulk
+  historical CSV dumps under `us_options_opra/` — day/minute aggregates,
+  trades, and quotes back to 2014 — a different entitlement from the blocked
+  REST/WS endpoints, confirmed working. This is the practical way to backtest
+  the delta/wing/IV-rank parameters or pre-seed `iv_history.json`: point a
+  standard S3 client (e.g. `boto3`) at `MASSIVE_S3_ENDPOINT`/`MASSIVE_S3_BUCKET`
+  with the access/secret key pair. It's a static daily export, not a live
+  feed, so it can't replace the moomoo ingestion path.
 
 ## Architecture
 
@@ -190,8 +220,8 @@ app/
 │   ├── risk.py          stops, daily loss limit, Kelly sizing
 │   └── data.py          BTC spot/1-minute candles (Coinbase public API)
 ├── spreads/           Intraday 0-3 DTE vertical-spread bot (python -m app.spreads)
-│   ├── bot.py           task orchestration (reader/consumer/snapshots/scanner/watchdog)
-│   ├── ingest.py        Polygon OPRA WebSocket + snapshot greeks (asyncio.Queue backpressure)
+│   ├── bot.py           task orchestration (stream/consumer/discovery/scanner/watchdog)
+│   ├── ingest.py        moomoo OpenD push (QUOTE + ORDER_BOOK) via asyncio.Queue backpressure
 │   ├── chain.py         in-memory numpy options chain (bid/ask/delta/gamma/IV/tick ts)
 │   ├── ivrank.py        rolling IV-rank tracker (persisted)
 │   ├── scanner.py       regime switch + delta strike selection

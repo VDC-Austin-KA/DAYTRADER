@@ -1,31 +1,34 @@
-"""Low-latency market-data ingestion from Polygon.io.
+"""Low-latency market-data ingestion from moomoo OpenD.
 
-Two feeds converge on the :class:`~.chain.ChainStore`:
+moomoo's OpenAPI SDK is synchronous and callback-based: real-time pushes
+arrive on handler callbacks fired from an SDK-owned thread, and chain
+discovery/subscribe calls block. This module bridges both onto the asyncio
+loop the same way ``execution.py`` bridges order placement:
 
-* **WebSocket OPRA quotes** — ``wss://socket.polygon.io/options``. The
-  reader coroutine does nothing but push raw frames onto a bounded
-  ``asyncio.Queue``; a separate consumer parses them and updates the chain.
-  When the queue is full the OLDEST tick is dropped (for NBBO only the
-  latest quote matters), so a slow consumer can never stall the socket and
-  back TCP up into Polygon's server.
+* Push callbacks (``StockQuoteHandlerBase`` for greeks/IV/last price,
+  ``OrderBookHandlerBase`` for top-of-book bid/ask) marshal onto the event
+  loop via ``loop.call_soon_threadsafe`` and enqueue onto a bounded
+  ``asyncio.Queue``. The SDK's own thread never touches the chain store
+  directly, and a full queue drops the OLDEST tick rather than blocking the
+  push thread (backpressure policy, same as a WS reader would need).
+* A consumer coroutine drains the queue and updates the ``ChainStore``.
+* A separate discovery task polls the option chain for the configured DTE
+  window on ``contract_discovery_seconds`` — contracts roll on/off that
+  window as expiries pass and OpenD has no "new contract" push — and
+  subscribes anything newly seen in throttled batches. The same cycle
+  refreshes the underlying's spot price.
 
-* **REST option-chain snapshots** — Polygon serves greeks and implied vol
-  through ``/v3/snapshot/options/{underlying}``, not the stream, so a
-  background task refreshes them every few seconds (greeks drift far more
-  slowly than the NBBO) and also feeds the underlying spot price and the
-  IV-rank tracker. The blocking ``requests`` calls run in a worker thread
-  via ``asyncio.to_thread`` to keep the loop free.
+Quote pushes carry no per-field exchange timestamp for options, so each
+order-book tick is stamped with wall-clock arrival time (``time.time_ns()``);
+given the push transport is itself the real-time entitled feed, arrival time
+is a faithful proxy for the order-timing guardrail in ``execution.py``.
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from datetime import date
-
-import requests
-import websockets
 
 from .chain import ChainStore
 from .config import SpreadsConfig
@@ -34,193 +37,281 @@ from .models import OptionContract
 log = logging.getLogger("daytrader.spreads.ingest")
 
 
-class PolygonOptionsStream:
-    """Streams OPRA NBBO quotes into the chain store."""
+class MoomooOptionsStream:
+    """Owns the OpenD quote connection and the push -> ChainStore pipeline."""
 
     def __init__(self, cfg: SpreadsConfig, chain: ChainStore) -> None:
         self.cfg = cfg
         self.chain = chain
-        self.queue: asyncio.Queue[list[dict]] = asyncio.Queue(maxsize=cfg.tick_queue_size)
+        self.queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue(
+            maxsize=cfg.tick_queue_size
+        )
         self.dropped_ticks = 0
         self._subscribed: set[str] = set()
-        # Live connection object (ClientConnection on websockets>=13, the
-        # legacy protocol on 12); None whenever we're between reconnects.
-        self._ws = None
+        self._ctx = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     # ------------------------------------------------------------------ #
-    # Reader: socket -> queue (never blocks on downstream work)
+    # Connection + handler registration
     # ------------------------------------------------------------------ #
-    async def run_reader(self) -> None:
+    def _connect(self):
+        """Blocking: open the quote context and register push handlers."""
+        from moomoo import OpenQuoteContext  # type: ignore[import-not-found]
+
+        ctx = OpenQuoteContext(host=self.cfg.moomoo_opend_host, port=self.cfg.moomoo_opend_port)
+        ctx.set_handler(_make_quote_handler(self))
+        ctx.set_handler(_make_orderbook_handler(self))
+        return ctx
+
+    async def run(self) -> None:
+        self._loop = asyncio.get_running_loop()
         backoff = 1.0
         while True:
             try:
-                async with websockets.connect(
-                    self.cfg.polygon_ws_url, ping_interval=20, ping_timeout=20
-                ) as ws:
-                    self._ws = ws
-                    await ws.send(json.dumps(
-                        {"action": "auth", "params": self.cfg.polygon_api_key}
-                    ))
-                    if self._subscribed:
-                        await self._send_subscribe(sorted(self._subscribed))
-                    backoff = 1.0
-                    async for frame in ws:
-                        events = json.loads(frame)
-                        if not isinstance(events, list):
-                            events = [events]
-                        self._enqueue(events)
+                self._ctx = await asyncio.to_thread(self._connect)
+                log.info("moomoo quote context connected")
+                backoff = 1.0
+                # The context keeps pushing on its own thread; this
+                # coroutine just has to outlive it until cancelled or a
+                # keepalive probe finds the socket dead.
+                await asyncio.to_thread(self._wait_until_closed)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log.warning("polygon stream dropped (%s); reconnecting in %.0fs", exc, backoff)
-                self._ws = None
+                log.warning("moomoo quote context dropped (%s); reconnecting in %.0fs", exc, backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
+            finally:
+                if self._ctx is not None:
+                    try:
+                        self._ctx.close()
+                    except Exception:
+                        pass
+                    self._ctx = None
+                    self._subscribed.clear()
 
-    def _enqueue(self, events: list[dict]) -> None:
+    def _wait_until_closed(self) -> None:
+        """Blocks the worker thread; a keepalive failure raises to trigger
+        the reconnect loop instead of leaving a silently dead connection."""
+        from moomoo import RET_OK  # type: ignore[import-not-found]
+
+        while True:
+            time.sleep(5)
+            ret, _ = self._ctx.get_global_state()
+            if ret != RET_OK:
+                raise ConnectionError("moomoo quote context keepalive failed")
+
+    # ------------------------------------------------------------------ #
+    # Subscription (called from the discovery task)
+    # ------------------------------------------------------------------ #
+    async def subscribe_contracts(self, contracts: list[OptionContract]) -> None:
+        if self._ctx is None:
+            return
+        new = [c.moomoo_code for c in contracts if c.moomoo_code not in self._subscribed]
+        if not new:
+            return
+        await asyncio.to_thread(self._subscribe_batches, new)
+
+    def _subscribe_batches(self, codes: list[str]) -> None:
+        from moomoo import RET_OK, SubType  # type: ignore[import-not-found]
+
+        batch_size = max(1, self.cfg.subscribe_batch_size)
+        for i in range(0, len(codes), batch_size):
+            batch = codes[i : i + batch_size]
+            ret, msg = self._ctx.subscribe(batch, [SubType.QUOTE, SubType.ORDER_BOOK])
+            if ret != RET_OK:
+                log.warning("subscribe failed for %d codes: %s", len(batch), msg)
+                continue
+            self._subscribed.update(batch)
+            if i + batch_size < len(codes):
+                time.sleep(self.cfg.subscribe_batch_pause_seconds)
+
+    # ------------------------------------------------------------------ #
+    # Thread-safe enqueue (called from SDK callback threads)
+    # ------------------------------------------------------------------ #
+    def _enqueue_threadsafe(self, kind: str, payload: object) -> None:
+        if self._loop is None:
+            return
+        self._loop.call_soon_threadsafe(self._enqueue, kind, payload)
+
+    def _enqueue(self, kind: str, payload: object) -> None:
         try:
-            self.queue.put_nowait(events)
+            self.queue.put_nowait((kind, payload))
         except asyncio.QueueFull:
-            # Drop-oldest: stale NBBO is worthless, the incoming one is not.
+            # Drop-oldest: a stale greeks/NBBO tick is worthless once a
+            # fresher one exists, so make room rather than stall the SDK's
+            # push thread on a slow consumer.
             try:
                 self.queue.get_nowait()
                 self.dropped_ticks += 1
             except asyncio.QueueEmpty:
                 pass
             try:
-                self.queue.put_nowait(events)
+                self.queue.put_nowait((kind, payload))
             except asyncio.QueueFull:
                 self.dropped_ticks += 1
-
-    async def _send_subscribe(self, channels: list[str]) -> None:
-        if self._ws is not None and channels:
-            await self._ws.send(json.dumps(
-                {"action": "subscribe", "params": ",".join(channels)}
-            ))
-
-    async def subscribe_contracts(self, contracts: list[OptionContract]) -> None:
-        """Subscribe the NBBO channel for each contract (idempotent)."""
-        new = [
-            c for t in contracts
-            if (c := f"Q.{t.polygon_ticker}") not in self._subscribed
-        ]
-        if not new:
-            return
-        self._subscribed.update(new)
-        try:
-            await self._send_subscribe(new)
-        except Exception as exc:  # reconnect logic re-subscribes everything
-            log.warning("subscribe failed (%s); will retry on reconnect", exc)
 
     # ------------------------------------------------------------------ #
     # Consumer: queue -> chain store
     # ------------------------------------------------------------------ #
     async def run_consumer(self) -> None:
         while True:
-            events = await self.queue.get()
-            for ev in events:
-                try:
-                    self._apply(ev)
-                except Exception:
-                    log.exception("bad tick: %r", ev)
+            kind, payload = await self.queue.get()
+            try:
+                if kind == "quote":
+                    self._apply_quote_frame(payload)
+                elif kind == "orderbook":
+                    self._apply_orderbook(payload)
+            except Exception:
+                log.exception("bad %s tick: %r", kind, payload)
             self.queue.task_done()
 
-    def _apply(self, ev: dict) -> None:
-        etype = ev.get("ev")
-        if etype == "Q":
-            contract = OptionContract.from_occ(ev["sym"])
-            ts = int(ev.get("t") or 0)
-            # Polygon stamps options quotes in ms; normalise to ns and fall
-            # back to arrival time if the field is ever absent.
-            ts_ns = ts * 1_000_000 if 0 < ts < 10**15 else (ts or time.time_ns())
-            self.chain.update_quote(
+    def _apply_quote_frame(self, frame) -> None:
+        for row in frame.to_dict("records"):
+            try:
+                contract = OptionContract.from_moomoo_code(row["code"])
+            except ValueError:
+                continue  # underlying-stock quote or unrecognised symbol
+            iv = row.get("implied_volatility")
+            self.chain.update_greeks(
                 contract,
-                bid=float(ev.get("bp") or 0.0),
-                ask=float(ev.get("ap") or 0.0),
-                ts_ns=ts_ns,
+                delta=float(row.get("delta", float("nan"))),
+                gamma=float(row.get("gamma", float("nan"))),
+                # moomoo reports IV as a percentage (e.g. 20.5 == 20.5%).
+                iv=float(iv) / 100.0 if iv is not None else float("nan"),
             )
-        elif etype == "status":
-            log.info("polygon: %s %s", ev.get("status"), ev.get("message", ""))
+
+    def _apply_orderbook(self, payload: dict) -> None:
+        try:
+            contract = OptionContract.from_moomoo_code(payload["code"])
+        except ValueError:
+            return
+        bids, asks = payload.get("Bid") or [], payload.get("Ask") or []
+        if not bids or not asks:
+            return
+        self.chain.update_quote(
+            contract,
+            bid=float(bids[0][0]),
+            ask=float(asks[0][0]),
+            ts_ns=time.time_ns(),
+        )
 
 
-class SnapshotRefresher:
-    """Periodic greeks/IV/spot refresh from Polygon's snapshot endpoint."""
+def _make_quote_handler(stream: MoomooOptionsStream):
+    from moomoo import RET_OK, StockQuoteHandlerBase  # type: ignore[import-not-found]
+
+    class _Handler(StockQuoteHandlerBase):
+        def on_recv_rsp(self, rsp_pb):
+            ret_code, content = super().on_recv_rsp(rsp_pb)
+            if ret_code != RET_OK:
+                log.warning("quote push error: %s", content)
+                return ret_code, content
+            stream._enqueue_threadsafe("quote", content)
+            return RET_OK, content
+
+    return _Handler()
+
+
+def _make_orderbook_handler(stream: MoomooOptionsStream):
+    from moomoo import RET_OK, OrderBookHandlerBase  # type: ignore[import-not-found]
+
+    class _Handler(OrderBookHandlerBase):
+        def on_recv_rsp(self, rsp_pb):
+            ret_code, content = super().on_recv_rsp(rsp_pb)
+            if ret_code != RET_OK:
+                log.warning("order book push error: %s", content)
+                return ret_code, content
+            stream._enqueue_threadsafe("orderbook", content)
+            return RET_OK, content
+
+    return _Handler()
+
+
+class ContractDiscovery:
+    """Periodic chain scan: finds contracts in the DTE window, subscribes
+    new ones, and refreshes the underlying's spot price."""
 
     def __init__(self, cfg: SpreadsConfig, chain: ChainStore) -> None:
         self.cfg = cfg
         self.chain = chain
         self.spot: float = 0.0
         self.last_refresh: float = 0.0
-        self._session = requests.Session()
+        # A given expiry's strike ladder is static intraday — cache it after
+        # the first successful fetch so steady-state discovery only pays for
+        # get_option_chain calls on expiries newly entering the DTE window,
+        # keeping well under the broker's request-rate quota.
+        self._expiry_contracts: dict[str, list[OptionContract]] = {}
 
-    async def run(self, stream: PolygonOptionsStream) -> None:
+    async def run(self, stream: MoomooOptionsStream) -> None:
         while True:
             try:
-                contracts = await asyncio.to_thread(self._refresh_once)
-                self.last_refresh = time.time()
-                # Everything the snapshot knows about in our DTE window gets
-                # a live NBBO subscription.
-                await stream.subscribe_contracts(contracts)
+                if stream._ctx is not None:
+                    contracts = await asyncio.to_thread(self._discover_once, stream._ctx)
+                    self.last_refresh = time.time()
+                    await stream.subscribe_contracts(contracts)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
-                log.warning("snapshot refresh failed: %s", exc)
-            await asyncio.sleep(self.cfg.greeks_refresh_seconds)
+            except Exception:
+                log.exception("contract discovery cycle failed")
+            await asyncio.sleep(self.cfg.contract_discovery_seconds)
 
-    def _refresh_once(self) -> list[OptionContract]:
-        url = (
-            f"{self.cfg.polygon_rest_url}/v3/snapshot/options/"
-            f"{self.cfg.underlying}?limit=250&apiKey={self.cfg.polygon_api_key}"
-        )
+    def _discover_once(self, ctx) -> list[OptionContract]:
+        from moomoo import RET_OK, OptionCondType, OptionType  # type: ignore[import-not-found]
+
+        underlying_code = f"US.{self.cfg.underlying}"
+        ret, snap = ctx.get_market_snapshot([underlying_code])
+        if ret == RET_OK and len(snap) > 0:
+            self.spot = float(snap["last_price"].iloc[0])
+
+        ret, exp = ctx.get_option_expiration_date(code=underlying_code)
+        if ret != RET_OK:
+            log.warning("get_option_expiration_date failed: %s", exp)
+            return list(self._all_cached())
+
         today = date.today()
-        found: list[OptionContract] = []
-        while url:
-            resp = self._session.get(url, timeout=10)
-            resp.raise_for_status()
-            payload = resp.json()
-            for item in payload.get("results", []):
-                contract = self._ingest_snapshot_item(item, today)
-                if contract is not None:
-                    found.append(contract)
-            url = payload.get("next_url")
-            if url:
-                url += f"&apiKey={self.cfg.polygon_api_key}"
-        return found
+        in_window = [
+            strike_time
+            for strike_time in exp["strike_time"]
+            if self.cfg.min_dte <= (date.fromisoformat(strike_time) - today).days <= self.cfg.max_dte
+        ]
+        # Contracts that roll out of the window are dropped from the cache
+        # so a long-running session doesn't keep re-subscribing/holding
+        # state for expiries that are no longer relevant.
+        self._expiry_contracts = {
+            st: v for st, v in self._expiry_contracts.items() if st in in_window
+        }
 
-    def _ingest_snapshot_item(self, item: dict, today: date) -> OptionContract | None:
-        details = item.get("details") or {}
-        ticker = details.get("ticker")
-        if not ticker:
-            return None
-        try:
-            contract = OptionContract.from_occ(ticker)
-        except ValueError:
-            return None
-        if not (self.cfg.min_dte <= contract.dte(today) <= self.cfg.max_dte):
-            return None
-
-        ua = (item.get("underlying_asset") or {}).get("price")
-        if ua:
-            self.spot = float(ua)
-
-        greeks = item.get("greeks") or {}
-        iv = item.get("implied_volatility")
-        if greeks or iv is not None:
-            self.chain.update_greeks(
-                contract,
-                delta=float(greeks.get("delta", float("nan"))),
-                gamma=float(greeks.get("gamma", float("nan"))),
-                iv=float(iv) if iv is not None else float("nan"),
+        to_fetch = [st for st in in_window if st not in self._expiry_contracts]
+        queries = 0
+        for strike_time in to_fetch:
+            if queries >= self.cfg.max_chain_queries_per_cycle:
+                log.debug(
+                    "chain query cap reached (%d/cycle); %d expiries remain for next cycle",
+                    self.cfg.max_chain_queries_per_cycle, len(to_fetch) - queries,
+                )
+                break
+            ret, chain_df = ctx.get_option_chain(
+                code=underlying_code,
+                start=strike_time,
+                end=strike_time,
+                option_type=OptionType.ALL,
+                option_cond_type=OptionCondType.ALL,
             )
-        # Seed the book from the snapshot quote so scanning can start before
-        # the first WS tick lands; the stream overwrites it immediately after.
-        quote = item.get("last_quote") or {}
-        q = self.chain.quote(contract)
-        if q is None and quote.get("bid") is not None:
-            self.chain.update_quote(
-                contract,
-                bid=float(quote.get("bid") or 0.0),
-                ask=float(quote.get("ask") or 0.0),
-                ts_ns=0,  # marked stale on purpose: never tradeable as-is
-            )
-        return contract
+            queries += 1
+            if ret != RET_OK:
+                log.warning("get_option_chain failed for %s: %s", strike_time, chain_df)
+                continue  # left uncached: retried next cycle
+            contracts = []
+            for code in chain_df["code"]:
+                try:
+                    contracts.append(OptionContract.from_moomoo_code(code))
+                except ValueError:
+                    continue
+            self._expiry_contracts[strike_time] = contracts
+            if queries < len(to_fetch):
+                time.sleep(self.cfg.chain_query_pause_seconds)
+
+        return list(self._all_cached())
+
+    def _all_cached(self) -> list[OptionContract]:
+        return [c for contracts in self._expiry_contracts.values() for c in contracts]

@@ -14,7 +14,6 @@ pydantic==2.7.4
 pydantic-settings==2.3.4
 python-dotenv==1.0.1
 requests==2.32.3
-# moomoo OpenAPI SDK — only exercised when PREDICTION_TRADE_MODE=live.
+# moomoo OpenAPI SDK — powers both the prediction-bot live executor and the
+# vertical-spread bot's market data (app/spreads) + order execution.
 moomoo-api>=9.0
-# Polygon.io OPRA WebSocket stream for the vertical-spread bot (app/spreads).
-websockets>=12.0

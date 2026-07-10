@@ -2,11 +2,11 @@
 
 Concurrent tasks on one event loop:
 
-    reader     WebSocket frames -> bounded queue (never blocks)
-    consumer   queue -> ChainStore updates
-    snapshots  REST greeks/IV/spot refresh + NBBO subscriptions
-    scanner    IV-rank regime -> candidate -> guarded entry
-    watchdog   stop-losses, equity/margin circuit breakers
+    stream      moomoo OpenD push (QUOTE + ORDER_BOOK) -> bounded queue
+    consumer    queue -> ChainStore updates
+    discovery   periodic chain scan + spot refresh + NBBO subscriptions
+    scanner     IV-rank regime -> candidate -> guarded entry
+    watchdog    stop-losses, equity/margin circuit breakers
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import time
 from .chain import ChainStore
 from .config import SpreadsConfig, get_config
 from .execution import SpreadRouter, build_executor
-from .ingest import PolygonOptionsStream, SnapshotRefresher
+from .ingest import ContractDiscovery, MoomooOptionsStream
 from .ivrank import IVRankTracker
 from .scanner import SpreadScanner
 from .watchdog import RiskWatchdog
@@ -29,8 +29,8 @@ class SpreadBot:
     def __init__(self, cfg: SpreadsConfig | None = None) -> None:
         self.cfg = cfg or get_config()
         self.chain = ChainStore(self.cfg.underlying)
-        self.stream = PolygonOptionsStream(self.cfg, self.chain)
-        self.snapshots = SnapshotRefresher(self.cfg, self.chain)
+        self.stream = MoomooOptionsStream(self.cfg, self.chain)
+        self.discovery = ContractDiscovery(self.cfg, self.chain)
         self.iv_rank = IVRankTracker(self.cfg.iv_history_path, self.cfg.iv_rank_window_days)
         self.scanner = SpreadScanner(self.cfg)
         self.executor = build_executor(self.cfg)
@@ -40,19 +40,21 @@ class SpreadBot:
 
     # ------------------------------------------------------------------ #
     async def run(self) -> None:
-        if not self.cfg.polygon_api_key:
+        if not self.cfg.moomoo_opend_host:
             raise SystemExit(
-                "POLYGON_API_KEY is not set — the OPRA stream needs it. "
-                "Add it to .env / Railway service variables."
+                "MOOMOO_OPEND_HOST is not set — the options data feed needs a "
+                "running, reachable OpenD gateway. Add it to .env / Railway "
+                "service variables."
             )
         log.info(
             "spread bot starting: %s, %d-%d DTE, mode=%s",
             self.cfg.underlying, self.cfg.min_dte, self.cfg.max_dte, self.cfg.trade_mode,
         )
+        await self._maybe_seed_iv_history()
         tasks = [
-            asyncio.create_task(self.stream.run_reader(), name="ws-reader"),
-            asyncio.create_task(self.stream.run_consumer(), name="ws-consumer"),
-            asyncio.create_task(self.snapshots.run(self.stream), name="snapshots"),
+            asyncio.create_task(self.stream.run(), name="moomoo-stream"),
+            asyncio.create_task(self.stream.run_consumer(), name="moomoo-consumer"),
+            asyncio.create_task(self.discovery.run(self.stream), name="discovery"),
             asyncio.create_task(self._scan_loop(), name="scanner"),
             asyncio.create_task(self._watchdog_loop(), name="watchdog"),
         ]
@@ -71,6 +73,22 @@ class SpreadBot:
             await self.executor.close()
             log.info("spread bot stopped")
 
+    async def _maybe_seed_iv_history(self) -> None:
+        """Warm a cold IV-rank window from CBOE vol indices (best effort)."""
+        if not self.cfg.auto_seed_iv or self.iv_rank.sample_count >= 12:
+            return
+        from .seed_iv import seed
+
+        try:
+            await asyncio.to_thread(seed, self.cfg.iv_history_path)
+            self.iv_rank.reload()
+            log.info("IV-rank window pre-seeded: %d samples", self.iv_rank.sample_count)
+        except Exception as exc:
+            log.warning(
+                "IV pre-seed failed (%s); the window will warm up from live samples",
+                exc,
+            )
+
     # ------------------------------------------------------------------ #
     async def _scan_loop(self) -> None:
         while True:
@@ -83,7 +101,7 @@ class SpreadBot:
     async def _scan_once(self) -> None:
         if self.watchdog.halted:
             return
-        spot = self.snapshots.spot
+        spot = self.discovery.spot
         if spot <= 0:
             return
         atm_iv = self.chain.atm_iv(spot)

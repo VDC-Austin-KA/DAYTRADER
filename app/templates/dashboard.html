@@ -20,6 +20,11 @@
     </div>
   </header>
 
+  <div id="headline-bar" class="headline-bar hidden">
+    <span class="headline-label">⚡ LIVE</span>
+    <div class="headline-track"><div id="headline-items" class="headline-items"></div></div>
+  </div>
+
   <div class="disclaimer">
     ⚠️ <strong>Educational paper-trading only.</strong> Not financial advice.
     No real orders are placed. Options trading carries substantial risk of loss.
@@ -31,9 +36,43 @@
   <main>
     <section class="cards" id="summary-cards"></section>
 
+    <section class="panel movers">
+      <div class="panel-head">
+        <h2>🔥 Market Movers <span class="muted">— best options across the whole universe, ranked by blended profit likelihood</span></h2>
+        <button id="movers-refresh" class="btn ghost sm">Rescan</button>
+      </div>
+      <div class="scanner-note muted">
+        <strong>Surge Score</strong> (0-100) is a custom move-predictor: Bollinger-width
+        squeeze percentile (coiled volatility, 40%) + range/volume burst confirmation (30%)
+        + 5-day momentum z-score (30%). High surge = conditions that have historically
+        preceded outsized moves — it is a tendency, <em>not</em> a promise.
+        <strong>Whipsaw</strong> names swing hard both ways: the play card shows how to sell a
+        further-OTM wing after a favorable swing to make the position free.
+      </div>
+      <div id="plays-row" class="plays-row"></div>
+      <div id="movers-meta" class="muted"></div>
+      <div class="table-scroll">
+        <table id="movers-table" class="interactive">
+          <thead>
+            <tr>
+              <th data-k="symbol">Sym</th><th data-k="option_type">Type</th>
+              <th data-k="strike" data-num>Strike</th><th data-k="expiry">Exp</th>
+              <th data-k="dte" data-num>DTE</th><th data-k="cost" data-num>Cost</th>
+              <th data-k="prob_profit" data-num>POP</th><th data-k="success" data-num>Success</th>
+              <th data-k="potential_return" data-num>Potential</th>
+              <th data-k="surge" data-num>Surge</th><th data-k="direction">Dir</th>
+              <th data-k="whipsaw">Whipsaw</th><th data-k="blended_score" data-num>Score</th><th></th>
+            </tr>
+            <tr class="filter-row"></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="panel scanner">
       <div class="panel-head">
-        <h2>🎯 Opportunity Scanner <span class="muted">— cheap short-dated options, ranked</span></h2>
+        <h2>🎯 Opportunity Scanner <span class="muted">— cheap short-dated options, one ticker</span></h2>
       </div>
       <div class="scanner-controls">
         <label>Ticker

@@ -65,6 +65,27 @@ class Settings(BaseSettings):
         if s.strip()
     ]
 
+    # --- Movers scan (universe-wide options ranking + Surge Score) ---
+    # High-volume, high-beta names prone to significant swings. Notes on the
+    # requested list: SpaceX is private (DXYZ is the closest public proxy),
+    # SK Hynix trades as the OTC ADR HXSCL (options rarely listed — skipped
+    # gracefully), and "DRAM" has no US ticker (MU/SNDK/WDC cover memory).
+    movers_watchlist: List[str] = [
+        s.strip().upper()
+        for s in os.getenv(
+            "MOVERS_WATCHLIST",
+            "NVDA,AMD,INTC,MU,SNDK,WDC,META,TSLA,SMCI,AVGO,"
+            "SOXL,SOXS,GUSH,SPY,QQQ,DXYZ,HXSCL",
+        ).split(",")
+        if s.strip()
+    ]
+    movers_max_dte: int = int(os.getenv("MOVERS_MAX_DTE", "7"))
+    # Wider premium cap than the lotto scanner — ranking does the filtering.
+    movers_max_premium: float = float(os.getenv("MOVERS_MAX_PREMIUM", "5.00"))
+    # Surge Score needed before a name earns a suggested play card.
+    movers_surge_threshold: float = float(os.getenv("MOVERS_SURGE_THRESHOLD", "55"))
+    movers_table_size: int = int(os.getenv("MOVERS_TABLE_SIZE", "60"))
+
     # --- Scheduler ---
     enable_scheduler: bool = os.getenv("ENABLE_SCHEDULER", "true").lower() == "true"
     refresh_minutes: int = int(os.getenv("REFRESH_MINUTES", "30"))

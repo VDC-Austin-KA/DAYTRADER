@@ -150,6 +150,17 @@ def opportunities(
     return result
 
 
+@router.get("/movers")
+def movers(refresh: bool = False):
+    """Universe-wide movers scan: Surge Scores, globally ranked options,
+    suggested plays, and headline items for the ticker bar."""
+    if not settings.has_data_source:
+        raise HTTPException(400, "No market-data source configured (set TRADIER_TOKEN).")
+    from ..trading import movers as mv
+
+    return mv.scan_universe(refresh=refresh)
+
+
 @router.get("/options/{symbol}")
 def scan_options(symbol: str, direction: str = "call"):
     pick = options.select_contract(symbol.upper(), direction)

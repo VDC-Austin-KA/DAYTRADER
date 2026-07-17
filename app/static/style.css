@@ -136,3 +136,48 @@ select {
   max-width: 360px;
 }
 .toast.show { opacity: 1; transform: translateY(0); }
+
+/* --- Headline ticker bar --- */
+.headline-bar {
+  display: flex; align-items: center; gap: 0;
+  background: linear-gradient(90deg, #14203a, #1a2745);
+  border-bottom: 1px solid var(--border, #243044);
+  overflow: hidden; white-space: nowrap; height: 34px;
+}
+.headline-label {
+  flex: 0 0 auto; padding: 0 12px; font-weight: 700; font-size: 12px;
+  color: #ffd166; background: rgba(255, 209, 102, .08); line-height: 34px;
+  border-right: 1px solid var(--border, #243044);
+}
+.headline-track { flex: 1; overflow: hidden; }
+.headline-items { display: inline-block; animation: headline-scroll 45s linear infinite; }
+.headline-bar:hover .headline-items { animation-play-state: paused; }
+.headline-item { display: inline-block; padding: 0 28px; line-height: 34px; font-size: 13px; }
+@keyframes headline-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+/* --- Movers panel --- */
+.plays-row { display: flex; gap: 12px; overflow-x: auto; padding: 10px 0; }
+.play-card {
+  flex: 0 0 320px; background: #131c30; border: 1px solid var(--border, #243044);
+  border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 6px;
+}
+.play-card.whipsaw { border-color: #ffd16655; }
+.play-head { display: flex; align-items: center; gap: 8px; }
+.play-line { font-size: 12.5px; line-height: 1.45; white-space: normal; }
+.play-line.wing { color: #ffd166; }
+.surge-badge {
+  font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 10px;
+  background: rgba(79, 140, 255, .15); color: #7fb0ff;
+}
+.surge-badge.hot { background: rgba(255, 99, 99, .18); color: #ff8a8a; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: #fff; }
+.filter-row th { padding: 2px 6px 6px; }
+.col-filter {
+  width: 100%; box-sizing: border-box; font-size: 11px; padding: 3px 6px;
+  background: #0e1626; color: inherit;
+  border: 1px solid var(--border, #243044); border-radius: 6px;
+}

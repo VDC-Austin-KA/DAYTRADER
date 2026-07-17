@@ -337,12 +337,128 @@ $("#refresh-btn").addEventListener("click", async () => {
 
 $("#chart-symbol").addEventListener("change", (e) => selectSymbol(e.target.value));
 
+// --- Market Movers: universe scan, plays, headlines, filterable table ---
+let moversRows = [];
+let moversSort = { key: "blended_score", dir: -1, numeric: true };
+
+function renderHeadlines(items) {
+  const bar = $("#headline-bar");
+  if (!items || !items.length) { bar.classList.add("hidden"); return; }
+  bar.classList.remove("hidden");
+  // Duplicate content so the marquee loop is seamless.
+  const html = items.map(h => `<span class="headline-item">${h}</span>`).join("");
+  $("#headline-items").innerHTML = html + html;
+}
+
+function renderPlays(plays) {
+  const row = $("#plays-row");
+  if (!plays.length) {
+    row.innerHTML = `<div class="muted">No names above the surge threshold right now — the universe is quiet.</div>`;
+    return;
+  }
+  row.innerHTML = plays.map(p => `
+    <div class="play-card ${p.whipsaw ? 'whipsaw' : ''}">
+      <div class="play-head">
+        <strong>${p.symbol}</strong>
+        <span class="pill ${p.direction === 'up' ? 'bullish' : p.direction === 'down' ? 'bearish' : 'neutral'}">${p.direction}</span>
+        <span class="surge-badge">surge ${p.surge.toFixed(0)}</span>
+        ${p.whipsaw ? '<span class="pill neutral">whipsaw</span>' : ''}
+      </div>
+      <div class="play-line">🎯 ${p.entry}</div>
+      <div class="play-line muted">↔️ POP ${(p.prob_profit * 100).toFixed(0)}% · potential +${(p.potential_return * 100).toFixed(0)}% · ${p.exit_plan}</div>
+      ${p.wing_plan ? `<div class="play-line wing">🪽 ${p.wing_plan}</div>` : ''}
+      <button class="btn sm" onclick='buyOpportunity(${JSON.stringify({
+        symbol: p.symbol, option_type: p.option_type, contract_symbol: p.contract_symbol,
+        strike: p.strike, expiry: p.expiry, mid: p.mid, prob_profit: p.prob_profit,
+      })})'>Buy 1 (paper)</button>
+    </div>`).join("");
+}
+
+function moversRowHtml(o) {
+  return `<tr>
+    <td>${o.symbol}</td>
+    <td><span class="pill ${o.option_type === 'call' ? 'bullish' : 'bearish'}">${o.option_type}</span></td>
+    <td>$${o.strike}</td><td>${o.expiry}</td><td>${o.dte}</td>
+    <td>$${o.cost.toFixed(0)}</td>
+    <td style="color:${popColor(o.prob_profit)}">${(o.prob_profit * 100).toFixed(1)}%</td>
+    <td>${(o.success * 100).toFixed(1)}%</td>
+    <td class="pos">+${(o.potential_return * 100).toFixed(0)}%</td>
+    <td><span class="surge-badge ${o.surge >= 70 ? 'hot' : ''}">${o.surge.toFixed(0)}</span></td>
+    <td>${o.direction}</td>
+    <td>${o.whipsaw ? 'yes' : ''}</td>
+    <td>${o.blended_score.toFixed(3)}</td>
+    <td><button class="btn sm" onclick='buyOpportunity(${JSON.stringify(o)})'>Buy 1</button></td>
+  </tr>`;
+}
+
+function drawMoversTable() {
+  const filters = [...document.querySelectorAll("#movers-table .col-filter")]
+    .map(inp => ({ key: inp.dataset.k, q: inp.value.trim().toLowerCase() }))
+    .filter(f => f.q);
+  let rows = moversRows.filter(o =>
+    filters.every(f => String(f.key === 'whipsaw' ? (o.whipsaw ? 'yes' : 'no') : o[f.key])
+      .toLowerCase().includes(f.q)));
+  const { key, dir, numeric } = moversSort;
+  rows = rows.slice().sort((a, b) => {
+    const av = a[key], bv = b[key];
+    return dir * (numeric ? (av - bv) : String(av).localeCompare(String(bv)));
+  });
+  $("#movers-table tbody").innerHTML = rows.length
+    ? rows.map(moversRowHtml).join("")
+    : `<tr><td colspan="14" class="muted">Nothing matches the filters.</td></tr>`;
+}
+
+function initMoversTable() {
+  const head = document.querySelectorAll("#movers-table thead tr:first-child th");
+  const filterRow = document.querySelector("#movers-table .filter-row");
+  filterRow.innerHTML = "";
+  head.forEach(th => {
+    const td = document.createElement("th");
+    if (th.dataset.k) {
+      td.innerHTML = `<input class="col-filter" data-k="${th.dataset.k}" placeholder="filter" />`;
+      th.classList.add("sortable");
+      th.addEventListener("click", () => {
+        const numeric = "num" in th.dataset;
+        if (moversSort.key === th.dataset.k) moversSort.dir *= -1;
+        else moversSort = { key: th.dataset.k, dir: numeric ? -1 : 1, numeric };
+        drawMoversTable();
+      });
+    }
+    filterRow.appendChild(td);
+  });
+  filterRow.addEventListener("input", drawMoversTable);
+}
+
+async function loadMovers(refresh = false) {
+  const meta = $("#movers-meta");
+  meta.innerHTML = `<span class="spinner"></span> Scanning the movers universe…`;
+  try {
+    const r = await api(`/api/movers${refresh ? "?refresh=true" : ""}`);
+    moversRows = r.options;
+    renderHeadlines(r.headlines);
+    renderPlays(r.plays);
+    drawMoversTable();
+    const hot = r.readings.filter(x => x.surge >= 60).map(x => `${x.symbol} ${x.surge.toFixed(0)}`);
+    meta.textContent = `${r.watchlist.length} tickers scanned · ${r.options.length} ranked contracts · ` +
+      (hot.length ? `hot: ${hot.join(", ")}` : "no high-surge names right now") +
+      ` · updated ${new Date(r.generated_at * 1000).toLocaleTimeString()}`;
+  } catch (e) {
+    meta.textContent = "";
+    $("#movers-table tbody").innerHTML = `<tr><td colspan="14" class="neg">${e.message}</td></tr>`;
+  }
+}
+
+$("#movers-refresh").addEventListener("click", () => loadMovers(true));
+initMoversTable();
+
 // Initial load.
 checkDataSource();
 loadSummary();
 loadSignals();
 loadModels();
 loadTrades();
+loadMovers();
 startTrainingPoll();  // surfaces any startup auto-training in progress
 setInterval(loadSummary, 60000);
 setInterval(checkDataSource, 60000);
+setInterval(loadMovers, 150000);  // movers rescan every 2.5 min (server caches 2 min)

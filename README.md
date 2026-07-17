@@ -50,6 +50,37 @@ reliably from cloud hosts like Railway.
 | **Scheduler** | Background signal refresh + weekly retrain (APScheduler) |
 | **Frontend** | Single-page dashboard with Chart.js price charts, signals table, positions, model metrics, trade log |
 
+## 🔥 Market Movers — universe-wide options ranking
+
+The dashboard's top panel sweeps a watchlist of high-volume, high-beta names
+(`MOVERS_WATCHLIST` — semis/memory: NVDA, AMD, INTC, MU, SNDK, WDC, SMCI,
+AVGO; megacaps META, TSLA; leveraged/sector ETFs SOXL, SOXS, GUSH; indexes
+SPY, QQQ; DXYZ as the closest public SpaceX proxy; HXSCL for SK Hynix) and,
+instead of showing one ticker's POP at a time, ranks **every contract across
+the whole universe** by a blended likelihood-of-profit score. Each column is
+click-sortable and has its own filter box.
+
+**Surge Score (0-100)** — a custom pre-move indicator computed per name from
+signals that have historically preceded outsized moves:
+
+| Weight | Component | Signal |
+|--------|-----------|--------|
+| 40% | Squeeze | Bollinger-width percentile vs the past year — tight coils precede expansions |
+| 30% | Burst | Today's move vs its own ATR + volume vs 20-day average — volume confirms ignition |
+| 30% | Momentum | z-score of the 5-day rate of change — persistent pressure, signed for direction |
+
+A **whipsaw gauge** (Kaufman efficiency ratio < 0.35 with elevated ATR) flags
+names swinging hard both ways. For those, the suggested play is two-step:
+buy the option on the signal leg, and once a swing runs favorably, **sell a
+further-OTM contract of the same type/expiry for ≥ your entry cost** — the
+vertical is then free and the chop can't hurt you. Play cards show the exact
+wing strike; a **headline ticker bar** across the top streams names whose
+surge just jumped, hot movers, and the current top plays.
+
+`GET /api/movers` returns the whole payload (readings, ranked options, plays,
+headlines); results are cached ~2 minutes to respect Tradier rate limits.
+Surge scores are statistical tendencies, not guarantees.
+
 ## 🤖 BTC hourly prediction-market bot
 
 An autonomous bot (in `app/prediction/`) that trades **BTC hourly

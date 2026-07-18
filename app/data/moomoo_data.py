@@ -16,6 +16,7 @@ strikes are pre-filtered to a band around spot and batched.
 from __future__ import annotations
 
 import logging
+import socket
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -33,6 +34,13 @@ _STRIKE_BAND = 0.12
 _lock = threading.Lock()
 _quote_ctx = None
 
+# Reachability probe: fail fast rather than blocking inside the SDK.
+_CONNECT_TIMEOUT = 2.0
+_REACHABLE_TTL = 30.0      # confirmed-good, recheck rarely
+_UNREACHABLE_TTL = 10.0    # down: recheck sooner so recovery is quick
+_reachable_until = 0.0
+_reachable_state = False
+
 # Same column contract as the Tradier layer.
 _CHAIN_COLUMNS = [
     "contractSymbol", "strike", "lastPrice", "bid", "ask",
@@ -46,6 +54,36 @@ def configured() -> bool:
 
 def _us_code(symbol: str) -> str:
     return symbol if symbol.upper().startswith("US.") else f"US.{symbol.upper()}"
+
+
+def _reachable() -> bool:
+    """Cheap TCP probe before handing the SDK a host it cannot reach.
+
+    Without this, a deployment with no route to OpenD (e.g. a cloud relay
+    pointed at a home machine) blocks inside the SDK's connect until the
+    HTTP request times out, so the dashboard hangs instead of reporting a
+    misconfiguration. Result is cached briefly so this stays off the hot path.
+    """
+    global _reachable_until, _reachable_state
+
+    now = time.time()
+    if now < _reachable_until:
+        return _reachable_state
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(_CONNECT_TIMEOUT)
+    try:
+        sock.connect((settings.moomoo_opend_host, settings.moomoo_opend_port))
+        _reachable_state = True
+    except OSError as exc:
+        log.warning(
+            "OpenD unreachable at %s:%s (%s)",
+            settings.moomoo_opend_host, settings.moomoo_opend_port, exc,
+        )
+        _reachable_state = False
+    finally:
+        sock.close()
+    _reachable_until = now + (_REACHABLE_TTL if _reachable_state else _UNREACHABLE_TTL)
+    return _reachable_state
 
 
 def _context():
@@ -74,7 +112,7 @@ def _reset_context() -> None:
 
 def _call(fn_name: str, *args, **kwargs):
     """Run one quote-context method; returns the data or None on any error."""
-    if not configured():
+    if not configured() or not _reachable():
         return None
     with _lock:
         try:
@@ -137,7 +175,7 @@ def get_history(symbol: str, years: int = 5, interval: str = "daily") -> pd.Data
     frames: list[pd.DataFrame] = []
     page_key = None
     for _ in range(20):  # paging hard stop
-        if not configured():
+        if not configured() or not _reachable():
             return pd.DataFrame()
         with _lock:
             try:

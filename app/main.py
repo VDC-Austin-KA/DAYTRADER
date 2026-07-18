@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from . import auth
 from .config import settings
 from .database import init_db
-from .routers import api, views
+from .routers import api, tunnel, views
 from .scheduler import shutdown_scheduler, start_scheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -31,4 +31,5 @@ app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 auth.install(app)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(api.router)
+app.include_router(tunnel.router)
 app.include_router(views.router)

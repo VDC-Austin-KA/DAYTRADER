@@ -159,12 +159,11 @@ def test_paper_engine(tmp_path, monkeypatch):
     db_path = tmp_path / "t.db"
     monkeypatch.setattr(config.settings, "database_url", f"sqlite:///{db_path}")
 
-    # Rebuild engine bound to the temp DB.
-    import importlib
-
+    # Rebind the engine to the temp DB. Do NOT reload the module: a reload
+    # builds a new Base and orphans every model declared against the old one.
     from app import database
 
-    importlib.reload(database)
+    database.rebind(f"sqlite:///{db_path}")
     database.init_db()
 
     from app.models import Portfolio  # noqa: F401

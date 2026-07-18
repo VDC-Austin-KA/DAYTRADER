@@ -24,7 +24,10 @@ from .config import settings
 log = logging.getLogger("daytrader.auth")
 
 # Health stays open so the tunnel/Railway healthcheck works without creds.
-_OPEN_PATHS = {"/api/health"}
+# /go redirects to a host that demands its own Basic auth, so it leaks
+# only a hostname; requiring credentials here would mean typing them
+# twice. /api/tunnel carries its own shared-secret check.
+_OPEN_PATHS = {"/api/health", "/go", "/api/tunnel"}
 
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):

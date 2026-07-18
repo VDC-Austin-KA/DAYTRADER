@@ -38,6 +38,15 @@ class Settings(BaseSettings):
     # dashboard Buy/Close buttons through the moomoo OpenD gateway.
     dashboard_trade_mode: str = os.getenv("DASHBOARD_TRADE_MODE", "paper").lower()
 
+    # --- Session risk ---
+    # Hard no-overnight rule: block entries after the cutoff and force-flatten
+    # before the bell. Overnight gaps cannot be stopped out of -- there are no
+    # prices between the close and the open -- so this is on by default and
+    # should stay on.
+    enforce_no_overnight: bool = (
+        os.getenv("ENFORCE_NO_OVERNIGHT", "true").lower() == "true"
+    )
+
     # --- Dashboard access control ---
     # Required before exposing the UI over a tunnel: the dashboard can place
     # live orders, so an open public URL is an open brokerage account.

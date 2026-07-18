@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..data import market_data as md
 from ..models import Portfolio, Position, Trade
+from . import session
 
 
 def get_or_create_portfolio(db: Session, name: str = "default") -> Portfolio:
@@ -60,6 +61,17 @@ def open_position(
     quantity = int(quantity)
     if quantity <= 0:
         return None, "Quantity must be positive."
+
+    # No-overnight rule, enforced at the order path so no caller -- dashboard,
+    # scanner or bot -- can open something that would have to be held.
+    if settings.enforce_no_overnight:
+        allowed, why = session.can_open()
+        if not allowed:
+            return None, f"Entry blocked: {why}."
+        valid, why = session.validate_expiry(expiry)
+        if not valid:
+            return None, f"Entry blocked: {why}."
+
     cost = price * quantity * 100
     if cost > portfolio.cash:
         return None, f"Insufficient cash: need ${cost:,.2f}, have ${portfolio.cash:,.2f}."

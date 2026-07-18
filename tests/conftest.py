@@ -26,5 +26,9 @@ os.environ.update(
         "TRADIER_TOKEN": "",
         "ENABLE_SCHEDULER": "false",
         "AUTO_TRAIN_ON_START": "false",
+        # Engine tests open positions at whatever wall-clock time the suite
+        # runs, so the session gate is disabled here. The rule itself is
+        # covered directly, with frozen timestamps, in test_session.py.
+        "ENFORCE_NO_OVERNIGHT": "false",
     }
 )

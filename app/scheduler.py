@@ -11,6 +11,7 @@ from .database import SessionLocal
 from .models import ModelMeta
 from .prediction import bot as prediction_bot
 from .trading import paper, signals
+from .trading import session as _session_mod
 from .training import train_universe
 
 log = logging.getLogger("daytrader.scheduler")
@@ -28,6 +29,43 @@ def refresh_all_signals() -> None:
         # Mark open positions to market.
         pf = paper.get_or_create_portfolio(db)
         paper.mark_to_market(db, pf)
+    finally:
+        db.close()
+
+
+def flatten_all_positions() -> None:
+    """Force-close every open position. Runs every minute; acts near the bell.
+
+    This is the enforcement half of the no-overnight rule -- blocking late
+    entries is not enough, because a position opened at 13:59 still has to
+    be exited. Runs on a 1-minute interval rather than a single cron fire so
+    a restart, a paused scheduler, or one failed attempt cannot let a
+    position slip through into the night.
+    """
+    from .trading import session as sess
+
+    if not settings.enforce_no_overnight:
+        return
+    should, why = sess.must_flatten()
+    if not should:
+        return
+
+    db = SessionLocal()
+    try:
+        pf = paper.get_or_create_portfolio(db)
+        open_positions = [p for p in pf.positions if p.is_open]
+        if not open_positions:
+            return
+        log.warning("FLATTEN: %s - closing %d position(s)", why, len(open_positions))
+        for pos in open_positions:
+            try:
+                _, msg = paper.close_position(db, pf, pos.id, note="auto-flatten EOD")
+                log.warning("FLATTEN %s: %s", pos.symbol, msg)
+            except Exception:
+                # Keep going: one stuck position must not strand the others.
+                log.exception("FLATTEN failed for position %s", pos.id)
+    except Exception:
+        log.exception("flatten sweep failed")
     finally:
         db.close()
 
@@ -123,6 +161,24 @@ def start_scheduler() -> None:
         settings.movers_window_refresh_seconds,
         settings.movers_window_start, settings.movers_window_end,
         settings.movers_window_tz,
+    )
+    # No-overnight enforcement: sweep every minute, act inside the flatten
+    # window. Interval (not cron) so a restart cannot skip the one firing
+    # that matters.
+    _scheduler.add_job(
+        flatten_all_positions,
+        "interval",
+        minutes=1,
+        id="flatten_all_positions",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    log.info(
+        "no-overnight enforcement %s (last entry %s CT, flatten %s CT)",
+        "ON" if settings.enforce_no_overnight else "OFF",
+        _session_mod.LAST_ENTRY.strftime("%H:%M"),
+        _session_mod.FLATTEN_AT.strftime("%H:%M"),
     )
     # Weekly retrain (Sunday 06:00 UTC).
     _scheduler.add_job(

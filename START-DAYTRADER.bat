@@ -62,7 +62,7 @@ REM Wait for it to answer before tunnelling (up to ~40s; first run trains).
 set /a tries=0
 :waitloop
 set /a tries+=1
-timeout /t 2 /nobreak >nul
+call :sleep 2
 curl -s -o nul -m 2 http://127.0.0.1:8000/api/health && goto serverup
 if !tries! LSS 20 goto waitloop
 echo  [X] Server did not come up. Check server.log
@@ -84,12 +84,12 @@ start "DAYTRADER tunnel" /min cmd /c "cloudflared tunnel --url http://localhost:
 set /a tries=0
 :tunnelwait
 set /a tries+=1
-timeout /t 2 /nobreak >nul
+call :sleep 2
 for /f "tokens=*" %%u in ('findstr /R /C:"https://.*trycloudflare.com" tunnel.log 2^>nul') do (
     for %%t in (%%u) do echo %%t | findstr /C:"trycloudflare.com" >nul && set "TUNNEL=%%t"
 )
 if not "!TUNNEL!"=="" goto tunnelup
-if !tries! LSS 15 goto tunnelwait
+if !tries! LSS 30 goto tunnelwait
 echo  [!] Tunnel did not report a URL - check tunnel.log
 goto localonly
 
@@ -123,5 +123,10 @@ taskkill /FI "WINDOWTITLE eq DAYTRADER server*" /T /F >nul 2>&1
 taskkill /FI "WINDOWTITLE eq DAYTRADER tunnel*" /T /F >nul 2>&1
 taskkill /IM cloudflared.exe /F >nul 2>&1
 echo  Done.
-timeout /t 2 >nul
-endlocal
+call :sleep 2
+goto :eof
+
+:sleep
+ping -n %~1 127.0.0.1 >nul 2>&1
+goto :eof
+

@@ -15,6 +15,10 @@
       <span class="tag">ML · short-dated options (&lt; 1 mo)</span>
     </div>
     <div class="header-actions">
+      <label class="qty-field" title="Contracts per order (1 contract = 100 shares)">
+        Qty
+        <input id="order-qty" type="number" min="1" max="100" step="1" value="1">
+      </label>
       <button id="train-btn" class="btn ghost">Train models</button>
       <button id="refresh-btn" class="btn">Refresh signals</button>
     </div>

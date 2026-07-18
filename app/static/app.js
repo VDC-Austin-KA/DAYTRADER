@@ -88,7 +88,7 @@ async function loadSignals() {
           <td>${s.dte || "—"}</td>
           <td>${s.option_price ? "$" + s.option_price.toFixed(2) : "—"}</td>
           <td>${s.breakeven ? "$" + s.breakeven : "—"}</td>
-          <td>${canTrade ? `<button class="btn sm" onclick='buyFromSignal(${JSON.stringify(s)})'>Buy 1</button>` : ""}</td>
+          <td>${canTrade ? `<button class="btn sm" onclick='buyFromSignal(${JSON.stringify(s)})'>Buy</button>` : ""}</td>
         </tr>`;
       }).join("");
     }
@@ -100,14 +100,26 @@ async function loadSignals() {
   }
 }
 
+// Contracts per order, taken from the header field. Clamped so a stray
+// keystroke can't send a 10,000-lot to a live account.
+function orderQty() {
+  const raw = parseInt(($("#order-qty") || {}).value, 10);
+  if (!Number.isFinite(raw) || raw < 1) return 1;
+  return Math.min(raw, 100);
+}
+
 async function buyFromSignal(s) {
   try {
+    const qty = orderQty();
+    if (_liveTradeMode && !confirm(
+      `LIVE order to your moomoo account:\nBuy ${qty} ${s.symbol} ${s.option_type} $${s.strike} @ ~$${(s.option_price ?? 0).toFixed(2)}.\nProceed?`
+    )) return;
     const r = await api("/api/trade", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         symbol: s.symbol, option_type: s.option_type,
         contract_symbol: s.contract_symbol, strike: s.strike,
-        expiry: s.expiry, quantity: 1, price: s.option_price,
+        expiry: s.expiry, quantity: qty, price: s.option_price,
         note: "from signal",
       }),
     });
@@ -219,7 +231,7 @@ async function runScan() {
         <td>${o.breakeven_move_pct}%</td>
         <td>${(o.iv * 100).toFixed(0)}%</td>
         <td>${o.score.toFixed(2)}</td>
-        <td><button class="btn sm" onclick='buyOpportunity(${JSON.stringify(o)})'>Buy 1</button></td>
+        <td><button class="btn sm" onclick='buyOpportunity(${JSON.stringify(o)})'>Buy</button></td>
       </tr>`;
     }).join("");
   } catch (e) {
@@ -231,8 +243,10 @@ async function runScan() {
 let _liveTradeMode = false;
 
 async function buyOpportunity(o) {
+  const qty = orderQty();
   if (_liveTradeMode && !confirm(
-    `LIVE order to your moomoo account:\nBuy 1 ${o.symbol} ${o.option_type} $${o.strike} @ ~$${(o.mid ?? 0).toFixed(2)}.\nProceed?`
+    `LIVE order to your moomoo account:\nBuy ${qty} ${o.symbol} ${o.option_type} $${o.strike} @ ~$${(o.mid ?? 0).toFixed(2)}` +
+    `\nEst. cost: $${((o.mid ?? 0) * qty * 100).toFixed(2)}\nProceed?`
   )) return;
   try {
     const r = await api("/api/trade", {
@@ -240,7 +254,7 @@ async function buyOpportunity(o) {
       body: JSON.stringify({
         symbol: o.symbol, option_type: o.option_type,
         contract_symbol: o.contract_symbol, strike: o.strike,
-        expiry: o.expiry, quantity: 1, price: o.mid,
+        expiry: o.expiry, quantity: qty, price: o.mid,
         note: `scanner POP ${(o.prob_profit * 100).toFixed(0)}%`,
       }),
     });
@@ -399,7 +413,7 @@ function renderPlays(plays) {
       <button class="btn sm" onclick='buyOpportunity(${JSON.stringify({
         symbol: p.symbol, option_type: p.option_type, contract_symbol: p.contract_symbol,
         strike: p.strike, expiry: p.expiry, mid: p.mid, prob_profit: p.prob_profit,
-      })})'>Buy 1 (paper)</button>
+      })})'>Buy (paper)</button>
     </div>`).join("");
 }
 
@@ -416,7 +430,7 @@ function moversRowHtml(o) {
     <td>${o.direction}</td>
     <td>${o.whipsaw ? 'yes' : ''}</td>
     <td>${o.blended_score.toFixed(3)}</td>
-    <td><button class="btn sm" onclick='buyOpportunity(${JSON.stringify(o)})'>Buy 1</button></td>
+    <td><button class="btn sm" onclick='buyOpportunity(${JSON.stringify(o)})'>Buy</button></td>
   </tr>`;
 }
 

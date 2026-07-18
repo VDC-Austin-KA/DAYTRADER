@@ -96,6 +96,21 @@ goto localonly
 :tunnelup
 echo  [OK] Tunnel live
 
+REM --- 6. Publish the tunnel URL to the stable Railway front door -------
+REM One HTTP call: the phone bookmark (https://<railway-app>/go) then
+REM redirects here. Skipped silently if not configured.
+if not "!TUNNEL!"=="" (
+    for /f "tokens=2 delims==" %%s in ('findstr /B /C:"TUNNEL_UPDATE_SECRET=" .env 2^>nul') do set "TSECRET=%%s"
+    for /f "tokens=2 delims==" %%r in ('findstr /B /C:"TUNNEL_PUBLISH_URL=" .env 2^>nul') do set "TPUB=%%r"
+    if not "!TSECRET!"=="" if not "!TPUB!"=="" (
+        echo  [..] Publishing tunnel URL to !TPUB!
+        curl -s -m 15 -X POST -H "Content-Type: application/json" ^
+             -d "{\"url\":\"!TUNNEL!\",\"secret\":\"!TSECRET!\"}" ^
+             "!TPUB!/api/tunnel" >nul 2>&1
+        if errorlevel 1 (echo  [!] Publish failed - bookmark may point at the old URL) else (echo  [OK] Phone bookmark now points here)
+    )
+)
+
 :localonly
 echo.
 echo  ===============================================

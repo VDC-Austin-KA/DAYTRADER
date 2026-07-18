@@ -30,6 +30,14 @@ class Settings(BaseSettings):
         "TRADIER_BASE_URL", "https://sandbox.tradier.com/v1"
     )
 
+    # Data provider: "auto" (moomoo OpenD when configured, else Tradier),
+    # "moomoo" (force OpenD), or "tradier" (force Tradier).
+    data_provider: str = os.getenv("DATA_PROVIDER", "auto").lower()
+
+    # Dashboard trade routing: "paper" fills locally; "moomoo" routes the
+    # dashboard Buy/Close buttons through the moomoo OpenD gateway.
+    dashboard_trade_mode: str = os.getenv("DASHBOARD_TRADE_MODE", "paper").lower()
+
     # Train models automatically on startup if none exist and a token is set.
     auto_train_on_start: bool = (
         os.getenv("AUTO_TRAIN_ON_START", "true").lower() == "true"
@@ -37,7 +45,8 @@ class Settings(BaseSettings):
 
     @property
     def has_data_source(self) -> bool:
-        return bool(self.tradier_token)
+        # moomoo OpenD (real-time) OR a Tradier token counts as a source.
+        return bool(self.tradier_token) or bool(self.moomoo_opend_host)
 
     # --- Paper-trading defaults ---
     starting_cash: float = float(os.getenv("STARTING_CASH", "100000"))
@@ -85,6 +94,16 @@ class Settings(BaseSettings):
     # Surge Score needed before a name earns a suggested play card.
     movers_surge_threshold: float = float(os.getenv("MOVERS_SURGE_THRESHOLD", "55"))
     movers_table_size: int = int(os.getenv("MOVERS_TABLE_SIZE", "60"))
+    # Opening focus window: data caches tighten and a fast rescan job runs
+    # only inside this local weekday window (defaults to the pre/at-open
+    # 08:29-09:00 America/Chicago burst the user trades).
+    movers_window_tz: str = os.getenv("MOVERS_WINDOW_TZ", "America/Chicago")
+    movers_window_start: str = os.getenv("MOVERS_WINDOW_START", "08:29")
+    movers_window_end: str = os.getenv("MOVERS_WINDOW_END", "09:00")
+    # How often (seconds) to rescan the movers universe inside that window.
+    movers_window_refresh_seconds: int = int(
+        os.getenv("MOVERS_WINDOW_REFRESH_SECONDS", "45")
+    )
 
     # --- Scheduler ---
     enable_scheduler: bool = os.getenv("ENABLE_SCHEDULER", "true").lower() == "true"

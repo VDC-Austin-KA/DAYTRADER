@@ -1,11 +1,18 @@
-"""Market-data access layer backed by the Tradier API, with light caching.
+"""Market-data access layer: moomoo OpenD first, Tradier as fallback.
 
 All network calls live here so the rest of the app stays testable and the
-data provider can be swapped out without touching strategy code.
+data provider can be swapped without touching strategy code. Provider
+selection (``DATA_PROVIDER``):
 
-Configure a (free) Tradier developer token via the TRADIER_TOKEN env var.
-Sandbox base URL gives delayed quotes and real option chains, which is plenty
-for an educational paper-trading app.
+* ``auto`` (default) — moomoo OpenD when ``MOOMOO_OPEND_HOST`` is set and
+  answering (real-time, no 30-minute staleness), else Tradier when a
+  token is configured.
+* ``moomoo`` / ``tradier`` — force one provider.
+
+Cache TTLs tighten automatically inside the opening focus window
+(``MOVERS_WINDOW_*``, default 08:29-09:00 America/Chicago, Mon-Fri) so
+quotes and chains stay seconds-fresh exactly when the day's edge is
+decided, without hammering APIs all day long.
 """
 from __future__ import annotations
 
@@ -13,19 +20,51 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
 
 from ..config import settings
+from . import moomoo_data
 
 log = logging.getLogger("daytrader.data")
 
 # Simple in-process TTL cache: {key: (timestamp, value)}
 _CACHE: dict[str, tuple[float, object]] = {}
-_PRICE_TTL = 60          # seconds for quotes
-_HISTORY_TTL = 60 * 30   # seconds for daily history
-_CHAIN_TTL = 60 * 5      # seconds for option chains
+_HISTORY_TTL = 60 * 30   # seconds for daily history (bars only close daily)
+
+
+def in_open_window(now: datetime | None = None) -> bool:
+    """True inside the weekday opening focus window (local exchange-open
+    burst, default 08:29-09:00 America/Chicago)."""
+    try:
+        tz = ZoneInfo(settings.movers_window_tz)
+    except Exception:
+        tz = ZoneInfo("America/Chicago")
+    now = (now or datetime.now(timezone.utc)).astimezone(tz)
+    if now.weekday() >= 5:  # Sat/Sun
+        return False
+    hhmm = now.strftime("%H:%M")
+    return settings.movers_window_start <= hhmm < settings.movers_window_end
+
+
+def _price_ttl() -> int:
+    return 5 if in_open_window() else 60
+
+
+def _chain_ttl() -> int:
+    return 20 if in_open_window() else 60 * 5
+
+
+def _provider() -> str:
+    """Resolve the active provider for this call."""
+    mode = settings.data_provider
+    if mode == "moomoo":
+        return "moomoo"
+    if mode == "tradier":
+        return "tradier"
+    return "moomoo" if moomoo_data.configured() else "tradier"
 
 # Column shape the rest of the app expects from option-chain DataFrames.
 _CHAIN_COLUMNS = [
@@ -67,14 +106,22 @@ def _request(path: str, params: dict) -> Optional[dict]:
 
 
 def data_source_status() -> dict:
-    """Report whether the market-data provider is configured and reachable."""
+    """Report whether the active market-data provider is reachable."""
+    if _provider() == "moomoo":
+        st = moomoo_data.status()
+        # In auto mode, note the Tradier safety net if moomoo is down.
+        if not st["ok"] and settings.data_provider == "auto" and settings.tradier_token:
+            st["message"] += " Falling back to Tradier."
+        return st
+
     if not settings.tradier_token:
         return {
             "configured": False,
             "ok": False,
             "provider": "tradier",
-            "message": "No TRADIER_TOKEN set. Add a free Tradier token to load "
-                       "live data (see README).",
+            "message": "No data source connected. Start moomoo OpenD and set "
+                       "MOOMOO_OPEND_HOST for real-time data, or add a free "
+                       "TRADIER_TOKEN (see README).",
         }
     data = _request("markets/quotes", {"symbols": "SPY"})
     ok = bool(data and data.get("quotes"))
@@ -83,6 +130,7 @@ def data_source_status() -> dict:
         "ok": ok,
         "provider": "tradier",
         "base_url": settings.tradier_base_url,
+        "in_open_window": in_open_window(),
         "message": "Connected to Tradier." if ok else
                    "Token set but Tradier did not return data — verify the token "
                    "and that it matches the base URL (sandbox vs production).",
@@ -95,6 +143,16 @@ def get_history(symbol: str, years: int = 5, interval: str = "daily") -> pd.Data
     cached = _cache_get(key, _HISTORY_TTL)
     if cached is not None:
         return cached  # type: ignore[return-value]
+
+    if _provider() == "moomoo":
+        df = moomoo_data.get_history(symbol, years=years, interval=interval)
+        if not df.empty:
+            _cache_set(key, df)
+            return df
+        if settings.data_provider == "moomoo":  # forced: don't cross to Tradier
+            _cache_set(key, df)
+            return df
+        # auto: moomoo returned nothing, fall through to Tradier.
 
     end = datetime.now(timezone.utc).date()
     start = end - timedelta(days=int(max(years, 1) * 365.25) + 5)
@@ -130,9 +188,19 @@ def get_history(symbol: str, years: int = 5, interval: str = "daily") -> pd.Data
 def get_quote(symbol: str) -> Optional[float]:
     """Return the latest price for ``symbol`` (best-effort)."""
     key = f"quote:{symbol}"
-    cached = _cache_get(key, _PRICE_TTL)
+    cached = _cache_get(key, _price_ttl())
     if cached is not None:
         return cached  # type: ignore[return-value]
+
+    if _provider() == "moomoo":
+        price = moomoo_data.get_quote(symbol)
+        if price:
+            _cache_set(key, price)
+            return price
+        if settings.data_provider == "moomoo":
+            hist = get_history(symbol, years=1)
+            return float(hist["Close"].iloc[-1]) if not hist.empty else None
+        # auto: fall through to Tradier.
 
     data = _request("markets/quotes", {"symbols": symbol})
     price = None
@@ -155,9 +223,16 @@ def get_quote(symbol: str) -> Optional[float]:
 def get_expirations(symbol: str) -> list[str]:
     """List available option expiration dates (YYYY-MM-DD)."""
     key = f"exp:{symbol}"
-    cached = _cache_get(key, _CHAIN_TTL)
+    cached = _cache_get(key, _chain_ttl())
     if cached is not None:
         return cached  # type: ignore[return-value]
+
+    if _provider() == "moomoo":
+        exps = moomoo_data.get_expirations(symbol)
+        if exps or settings.data_provider == "moomoo":
+            _cache_set(key, exps)
+            return exps
+        # auto: fall through to Tradier.
 
     data = _request(
         "markets/options/expirations",
@@ -174,9 +249,17 @@ def get_expirations(symbol: str) -> list[str]:
 def get_option_chain(symbol: str, expiry: str) -> dict[str, pd.DataFrame]:
     """Return {'calls': df, 'puts': df} for one expiration date."""
     key = f"chain:{symbol}:{expiry}"
-    cached = _cache_get(key, _CHAIN_TTL)
+    cached = _cache_get(key, _chain_ttl())
     if cached is not None:
         return cached  # type: ignore[return-value]
+
+    if _provider() == "moomoo":
+        chain = moomoo_data.get_option_chain(symbol, expiry)
+        has_rows = not (chain["calls"].empty and chain["puts"].empty)
+        if has_rows or settings.data_provider == "moomoo":
+            _cache_set(key, chain)
+            return chain
+        # auto: fall through to Tradier.
 
     data = _request(
         "markets/options/chains",

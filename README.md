@@ -15,7 +15,37 @@ the resulting signals — all from a single dashboard. Designed to deploy on
 
 ## What it does
 
-## ⚙️ Required: connect market data (Tradier)
+## ⚙️ Market data & trading — moomoo OpenD (real-time) or Tradier
+
+The dashboard, scanners, and Market Movers read through one data layer that
+prefers **moomoo OpenD** and falls back to Tradier:
+
+- `DATA_PROVIDER=auto` (default) uses moomoo OpenD when `MOOMOO_OPEND_HOST`
+  is set and answering — real-time quotes, history, and option chains (bid/
+  ask/last, IV, OI, volume) with **no 30-minute Tradier staleness** — and
+  otherwise falls back to a Tradier token. Force either with `moomoo` or
+  `tradier`.
+- **Live trading from the dashboard:** set `DASHBOARD_TRADE_MODE=moomoo` and
+  the Buy/Close buttons route orders to your moomoo account through OpenD
+  (a LIVE pill appears in the header and live buys ask for confirmation).
+  Default `paper` fills locally. Trading must be unlocked by hand in the
+  OpenD GUI — the app never calls `unlock_trade` — and keep
+  `MOOMOO_TRD_ENV=SIMULATE` until routing is verified.
+- **Opening focus window:** to avoid all-day polling, data caches tighten to
+  seconds and a fast movers rescan runs **only inside a weekday window**
+  (`MOVERS_WINDOW_*`, default **08:29–09:00 America/Chicago**) — the pre/at-
+  open burst the strategy targets. Outside it, refreshes relax to the normal
+  cadence.
+
+Running OpenD is the same setup as the spread bot and BTC bot (see
+"Connecting moomoo OpenD" below): run it on a machine you control, log in,
+unlock trading, and point `MOOMOO_OPEND_HOST`/`MOOMOO_OPEND_PORT` at it.
+
+> Previously the app showed "no data available for this ticker" when the
+> Tradier sandbox returned empty quotes; pointing `DATA_PROVIDER` at a live
+> moomoo gateway (or a funded Tradier production token) resolves that.
+
+## ⚙️ Optional: Tradier fallback token
 
 The app needs a market-data source. It uses **[Tradier](https://developer.tradier.com)**,
 which has a **free** developer token and provides real option chains (with greeks)

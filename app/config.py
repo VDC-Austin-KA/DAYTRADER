@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     # dashboard Buy/Close buttons through the moomoo OpenD gateway.
     dashboard_trade_mode: str = os.getenv("DASHBOARD_TRADE_MODE", "paper").lower()
 
+    # --- Dashboard access control ---
+    # Required before exposing the UI over a tunnel: the dashboard can place
+    # live orders, so an open public URL is an open brokerage account.
+    dashboard_user: str = os.getenv("DASHBOARD_USER", "trader")
+    dashboard_password: str = os.getenv("DASHBOARD_PASSWORD", "")
+
     # Train models automatically on startup if none exist and a token is set.
     auto_train_on_start: bool = (
         os.getenv("AUTO_TRAIN_ON_START", "true").lower() == "true"

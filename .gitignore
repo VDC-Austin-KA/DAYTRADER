@@ -11,3 +11,5 @@ models_store/
 .DS_Store
 .pytest_cache/
 *.log
+backtest_cache/
+backtest_out.log

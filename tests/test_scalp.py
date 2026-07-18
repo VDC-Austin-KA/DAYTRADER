@@ -81,3 +81,22 @@ def test_sizing_caps_loss_at_risk_budget():
     # Bigger per-contract risk => fewer contracts, never more.
     assert scalp.size_position(0.20, 10_000, 0.01) == 5
     assert scalp.size_position(0.0, 10_000) == 0
+
+
+def test_triggers_fire_on_the_bid_not_the_mid():
+    """We are long, so exits happen at the bid. Testing mid trips early."""
+    b, _ = scalp.plan_bracket(_contract(0.48, 0.50), "SPY", now=_t(10, 0))
+    # Mid is through the target but the bid is not -- must NOT take profit.
+    action, _ = scalp.check_triggers(b, bid=b.target - 0.01, ask=b.target + 0.03)
+    assert action is None
+    action, price = scalp.check_triggers(b, bid=b.target, ask=b.target + 0.02)
+    assert action == "take_profit" and price == b.target
+
+
+def test_stop_fill_reflects_slippage_through_the_trigger():
+    """A stop trigger fills at the live bid, which may be worse."""
+    b, _ = scalp.plan_bracket(_contract(0.48, 0.50), "SPY", now=_t(10, 0))
+    gapped = b.stop - 0.03
+    action, price = scalp.check_triggers(b, bid=gapped, ask=gapped + 0.02)
+    assert action == "stop"
+    assert price == gapped, "must report the real fill, not the trigger price"

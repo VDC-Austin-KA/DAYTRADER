@@ -197,6 +197,33 @@ def plan_bracket(
     ), "ok"
 
 
+def check_triggers(
+    bracket: Bracket, bid: float, ask: float
+) -> tuple[str | None, float]:
+    """Evaluate a live quote against the bracket. Returns (action, price).
+
+    Trigger semantics, made explicit because they decide the fill:
+
+    * We are LONG, so every exit happens at the **bid**. Both the target and
+      the stop are therefore tested against the bid, never the mid or the
+      last trade. Testing a stop against the mid trips it roughly half a
+      spread early, every time.
+    * The stop is a TRIGGER, not a resting limit: once bid <= stop we push a
+      sell. That sell lands at whatever the bid is *then*, which on a fast
+      move is below the trigger. So a stop-trigger is strictly worse than a
+      resting limit at the same level -- it adds slippage on exactly the
+      trades that are already going against you. The estimated fill returned
+      here is the current bid, not the trigger price, so backtests and paper
+      runs do not quietly assume a perfect exit.
+    """
+    if bid >= bracket.target:
+        return "take_profit", bid
+    if bid <= bracket.stop:
+        # Slippage: we get the live bid, which may be through the trigger.
+        return "stop", bid
+    return None, bid
+
+
 def size_position(
     bracket_risk: float, account_equity: float, max_risk_pct: float = 0.01
 ) -> int:

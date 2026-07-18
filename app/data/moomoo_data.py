@@ -177,7 +177,11 @@ def get_expirations(symbol: str) -> list[str]:
     df = _call("get_option_expiration_date", code=_us_code(symbol))
     if df is None or len(df) == 0 or "strike_time" not in df.columns:
         return []
-    return [str(d)[:10] for d in df["strike_time"].tolist()]
+    # OpenD includes already-expired cycles (negative distance); quoting them
+    # yields a contract list with no marks, which reads as "no data".
+    if "option_expiry_date_distance" in df.columns:
+        df = df[pd.to_numeric(df["option_expiry_date_distance"], errors="coerce") >= 0]
+    return sorted({str(d)[:10] for d in df["strike_time"].tolist()})
 
 
 def get_option_chain(symbol: str, expiry: str) -> dict[str, pd.DataFrame]:

@@ -155,6 +155,23 @@ class PredictionBotState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class TunnelPointer(Base):
+    """Singleton row holding the current Cloudflare tunnel URL.
+
+    Quick tunnels mint a new random hostname every launch, so a phone
+    bookmark cannot point at one directly. The Railway deployment stores
+    the latest URL here and redirects to it, giving one permanent address
+    that survives restarts -- the DB, not the repo, is the right place for
+    a value that changes daily.
+    """
+
+    __tablename__ = "tunnel_pointer"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    url: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ModelMeta(Base):
     """Tracks the latest trained model's metrics per symbol."""
 

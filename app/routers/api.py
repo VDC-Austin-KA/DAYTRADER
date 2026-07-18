@@ -273,6 +273,69 @@ def close(req: CloseRequest, db: Session = Depends(get_db)):
     return {"message": msg}
 
 
+@router.post("/flip")
+def flip(req: CloseRequest, db: Session = Depends(get_db)):
+    """Reverse a position: close it and open the opposite side, same size.
+
+    Ordering matters. The replacement leg is located and validated BEFORE
+    anything is closed, because the failure mode of doing it the other way
+    round is being left flat when you meant to be reversed -- or worse, flat
+    without realising it. If we cannot open the other side, we close nothing
+    and say why.
+    """
+    from ..trading import session as sess
+
+    pf = paper.get_or_create_portfolio(db)
+    pos = next((p for p in pf.positions if p.id == req.position_id and p.is_open), None)
+    if pos is None:
+        raise HTTPException(404, "Position not found or already closed.")
+
+    # Refuse the whole operation if a new entry is not permitted right now,
+    # rather than half-completing it.
+    if settings.enforce_no_overnight:
+        allowed, why = sess.can_open()
+        if not allowed:
+            raise HTTPException(400, f"Flip blocked: {why}. Use Close instead.")
+
+    opposite = "put" if pos.option_type == "call" else "call"
+    chain = md.get_option_chain(pos.symbol, pos.expiry)
+    side = chain.get("puts" if opposite == "put" else "calls")
+    if side is None or side.empty:
+        raise HTTPException(400, f"No {opposite} chain available for {pos.symbol}.")
+
+    # Prefer the identical strike; fall back to the nearest listed one.
+    exact = side[side["strike"] == pos.strike]
+    row = exact.iloc[0] if len(exact) else side.iloc[
+        (side["strike"] - pos.strike).abs().argsort().iloc[0]
+    ]
+    bid, ask = float(row.get("bid") or 0), float(row.get("ask") or 0)
+    if bid <= 0 or ask <= 0:
+        raise HTTPException(400, f"{opposite.title()} has no two-sided market; cannot flip.")
+    price = round((bid + ask) / 2, 2)
+
+    close_ok, close_msg = paper.close_position(db, pf, pos.id)
+    if not close_ok:
+        raise HTTPException(400, f"Flip aborted, nothing changed: {close_msg}")
+
+    new_pos, open_msg = paper.open_position(
+        db, pf, pos.symbol, opposite, str(row["contractSymbol"]),
+        float(row["strike"]), pos.expiry, pos.quantity, price,
+        note=f"flip from {pos.option_type} {pos.strike}",
+    )
+    if new_pos is None:
+        # The close already happened; be explicit that we are now flat.
+        raise HTTPException(
+            400,
+            f"Closed {pos.option_type} but could NOT open {opposite}: {open_msg}. "
+            "You are now FLAT.",
+        )
+    return {
+        "message": f"Flipped {pos.symbol} {pos.option_type} ${pos.strike} -> "
+                   f"{opposite} ${row['strike']} x{pos.quantity} @ ${price:.2f}",
+        "position_id": new_pos.id,
+    }
+
+
 # --- BTC hourly prediction-market bot ---
 
 @router.get("/prediction/status")

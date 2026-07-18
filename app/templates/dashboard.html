@@ -15,6 +15,10 @@
       <span class="tag">ML · short-dated options (&lt; 1 mo)</span>
     </div>
     <div class="header-actions">
+      <label class="qty-field" title="Contracts per order (1 contract = 100 shares)">
+        Qty
+        <input id="order-qty" type="number" min="1" max="100" step="1" value="1">
+      </label>
       <button id="train-btn" class="btn ghost">Train models</button>
       <button id="refresh-btn" class="btn">Refresh signals</button>
     </div>
@@ -35,6 +39,23 @@
 
   <main>
     <section class="cards" id="summary-cards"></section>
+
+    <!-- Open positions ride at the top and stay put: closing a live position
+         is the most time-critical action on this page, so it must never be
+         a scroll away. Hidden entirely when flat, to stay out of the way. -->
+    <section class="panel positions-pinned" id="positions-panel" hidden>
+      <div class="panel-head">
+        <h2>📌 Open Positions <span class="muted">— click Close to exit</span></h2>
+        <button id="close-all-btn" class="btn sm red">Close all</button>
+      </div>
+      <table id="positions-table">
+        <thead>
+          <tr><th>Symbol</th><th>Type</th><th>Strike</th><th>Exp</th><th>Qty</th>
+          <th>Entry</th><th>Now</th><th>P&amp;L</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
 
     <section class="panel movers">
       <div class="panel-head">
@@ -143,17 +164,6 @@
     </div>
 
     <div class="grid">
-      <section class="panel">
-        <div class="panel-head"><h2>Open Positions</h2></div>
-        <table id="positions-table">
-          <thead>
-            <tr><th>Symbol</th><th>Type</th><th>Strike</th><th>Exp</th><th>Qty</th>
-            <th>Entry</th><th>Now</th><th>P&amp;L</th><th></th></tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </section>
-
       <section class="panel">
         <div class="panel-head"><h2>Model Performance</h2></div>
         <table id="models-table">

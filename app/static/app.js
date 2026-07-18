@@ -40,6 +40,10 @@ async function loadSummary() {
 
 function renderPositions(positions) {
   const tb = $("#positions-table tbody");
+  const panel = $("#positions-panel");
+  // Pinned panel only exists while there is something to close, so a flat
+  // account doesn't carry a permanent empty box at the top of the page.
+  if (panel) panel.hidden = !positions.length;
   if (!positions.length) {
     tb.innerHTML = `<tr><td colspan="9" class="muted">No open positions.</td></tr>`;
     return;
@@ -51,13 +55,43 @@ function renderPositions(positions) {
       <td>$${p.strike}</td><td>${p.expiry}</td><td>${p.quantity}</td>
       <td>$${p.entry_price.toFixed(2)}</td><td>$${p.current_price.toFixed(2)}</td>
       <td class="${pnlClass(p.unrealized_pnl)}">${fmtMoney(p.unrealized_pnl)}</td>
-      <td><button class="btn sm red" onclick="closePosition(${p.id})">Close</button></td>
+      <td class="pos-actions">
+        <button class="btn sm red" onclick="closePosition(${p.id})">Close</button>
+        <button class="btn sm ghost" title="Close this and open the opposite side, same size"
+                onclick='flipPosition(${p.id}, ${JSON.stringify(p).replace(/'/g, "&apos;")})'>⇄ Flip</button>
+      </td>
     </tr>`).join("");
 }
 
-async function closePosition(id) {
+async function closePosition(id, quiet = false) {
   try {
     const r = await api("/api/close", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ position_id: id }),
+    });
+    if (quiet) return r;           // bulk close reports once at the end
+    toast(r.message);
+    loadSummary(); loadTrades();
+  } catch (e) {
+    if (quiet) throw e;
+    toast(e.message, true);
+  }
+}
+
+// Reverse a position in one click: close this side, open the other at the
+// same strike (or nearest listed) and the same size. Two real orders in
+// live mode, so it always confirms.
+async function flipPosition(id, p) {
+  const to = p.option_type === "call" ? "PUT" : "CALL";
+  if (!confirm(
+    `Flip ${p.symbol} ${p.option_type.toUpperCase()} $${p.strike} → ${to} $${p.strike}, ` +
+    `same size (${p.quantity}).` +
+    (_liveTradeMode
+      ? "\n\nThis sends TWO REAL orders to your moomoo account: a sell to close and a buy to open."
+      : "")
+  )) return;
+  try {
+    const r = await api("/api/flip", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ position_id: id }),
     });
@@ -88,7 +122,7 @@ async function loadSignals() {
           <td>${s.dte || "—"}</td>
           <td>${s.option_price ? "$" + s.option_price.toFixed(2) : "—"}</td>
           <td>${s.breakeven ? "$" + s.breakeven : "—"}</td>
-          <td>${canTrade ? `<button class="btn sm" onclick='buyFromSignal(${JSON.stringify(s)})'>Buy 1</button>` : ""}</td>
+          <td>${canTrade ? buyCell(s, "buyFromSignal") : ""}</td>
         </tr>`;
       }).join("");
     }
@@ -100,14 +134,48 @@ async function loadSignals() {
   }
 }
 
-async function buyFromSignal(s) {
+// Contracts per order. Every Buy button has its own qty box beside it, so
+// size is set where the trade is taken rather than in a header field that
+// may be scrolled off screen. Falls back to the header default.
+// Clamped so a stray keystroke can't send a 10,000-lot to a live account.
+function clampQty(raw) {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(n, 100);
+}
+
+function orderQty(el) {
+  // el = the Buy button; its row-local input is the authority.
+  if (el) {
+    const box = el.parentElement && el.parentElement.querySelector(".row-qty");
+    if (box) return clampQty(box.value);
+  }
+  return clampQty(($("#order-qty") || {}).value);
+}
+
+// Markup for a qty box + Buy button pair, used by every table.
+function buyCell(payload, fnName = "buyOpportunity", label = "Buy") {
+  const json = JSON.stringify(payload).replace(/'/g, "&apos;");
+  return `<div class="buy-cell">
+    <input class="row-qty" type="number" min="1" max="100" step="1"
+           value="${clampQty(($("#order-qty") || {}).value)}"
+           title="Contracts" onclick="event.stopPropagation()">
+    <button class="btn sm" onclick='${fnName}(${json}, this)'>${label}</button>
+  </div>`;
+}
+
+async function buyFromSignal(s, el) {
   try {
+    const qty = orderQty(el);
+    if (_liveTradeMode && !confirm(
+      `LIVE order to your moomoo account:\nBuy ${qty} ${s.symbol} ${s.option_type} $${s.strike} @ ~$${(s.option_price ?? 0).toFixed(2)}.\nProceed?`
+    )) return;
     const r = await api("/api/trade", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         symbol: s.symbol, option_type: s.option_type,
         contract_symbol: s.contract_symbol, strike: s.strike,
-        expiry: s.expiry, quantity: 1, price: s.option_price,
+        expiry: s.expiry, quantity: qty, price: s.option_price,
         note: "from signal",
       }),
     });
@@ -219,7 +287,7 @@ async function runScan() {
         <td>${o.breakeven_move_pct}%</td>
         <td>${(o.iv * 100).toFixed(0)}%</td>
         <td>${o.score.toFixed(2)}</td>
-        <td><button class="btn sm" onclick='buyOpportunity(${JSON.stringify(o)})'>Buy 1</button></td>
+        <td>${buyCell(o)}</td>
       </tr>`;
     }).join("");
   } catch (e) {
@@ -230,9 +298,11 @@ async function runScan() {
 
 let _liveTradeMode = false;
 
-async function buyOpportunity(o) {
+async function buyOpportunity(o, el) {
+  const qty = orderQty(el);
   if (_liveTradeMode && !confirm(
-    `LIVE order to your moomoo account:\nBuy 1 ${o.symbol} ${o.option_type} $${o.strike} @ ~$${(o.mid ?? 0).toFixed(2)}.\nProceed?`
+    `LIVE order to your moomoo account:\nBuy ${qty} ${o.symbol} ${o.option_type} $${o.strike} @ ~$${(o.mid ?? 0).toFixed(2)}` +
+    `\nEst. cost: $${((o.mid ?? 0) * qty * 100).toFixed(2)}\nProceed?`
   )) return;
   try {
     const r = await api("/api/trade", {
@@ -240,7 +310,7 @@ async function buyOpportunity(o) {
       body: JSON.stringify({
         symbol: o.symbol, option_type: o.option_type,
         contract_symbol: o.contract_symbol, strike: o.strike,
-        expiry: o.expiry, quantity: 1, price: o.mid,
+        expiry: o.expiry, quantity: qty, price: o.mid,
         note: `scanner POP ${(o.prob_profit * 100).toFixed(0)}%`,
       }),
     });
@@ -366,6 +436,25 @@ $("#refresh-btn").addEventListener("click", async () => {
 
 $("#chart-symbol").addEventListener("change", (e) => selectSymbol(e.target.value));
 
+// Panic button: flatten everything. Always confirms -- in live mode this
+// sends real sell orders, and it is the one control you may reach for in a
+// hurry, which is exactly when an accidental click is most likely.
+$("#close-all-btn").addEventListener("click", async () => {
+  const rows = document.querySelectorAll("#positions-table tbody tr td:first-child");
+  const n = $("#positions-panel").hidden ? 0 : rows.length;
+  if (!n) return;
+  if (!confirm(
+    `Close ALL ${n} open position(s)?` +
+    (_liveTradeMode ? "\n\nThis sends REAL sell orders to your moomoo account." : "")
+  )) return;
+  const data = await api("/api/portfolio");
+  for (const p of data.positions) {
+    try { await closePosition(p.id, true); } catch (e) { /* keep going */ }
+  }
+  toast(`Closed ${data.positions.length} position(s).`);
+  loadSummary(); loadTrades();
+});
+
 // --- Market Movers: universe scan, plays, headlines, filterable table ---
 let moversRows = [];
 let moversSort = { key: "blended_score", dir: -1, numeric: true };
@@ -396,10 +485,10 @@ function renderPlays(plays) {
       <div class="play-line">🎯 ${p.entry}</div>
       <div class="play-line muted">↔️ POP ${(p.prob_profit * 100).toFixed(0)}% · potential +${(p.potential_return * 100).toFixed(0)}% · ${p.exit_plan}</div>
       ${p.wing_plan ? `<div class="play-line wing">🪽 ${p.wing_plan}</div>` : ''}
-      <button class="btn sm" onclick='buyOpportunity(${JSON.stringify({
+      ${buyCell({
         symbol: p.symbol, option_type: p.option_type, contract_symbol: p.contract_symbol,
         strike: p.strike, expiry: p.expiry, mid: p.mid, prob_profit: p.prob_profit,
-      })})'>Buy 1 (paper)</button>
+      })}
     </div>`).join("");
 }
 
@@ -416,7 +505,7 @@ function moversRowHtml(o) {
     <td>${o.direction}</td>
     <td>${o.whipsaw ? 'yes' : ''}</td>
     <td>${o.blended_score.toFixed(3)}</td>
-    <td><button class="btn sm" onclick='buyOpportunity(${JSON.stringify(o)})'>Buy 1</button></td>
+    <td>${buyCell(o)}</td>
   </tr>`;
 }
 

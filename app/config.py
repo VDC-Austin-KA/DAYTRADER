@@ -38,6 +38,31 @@ class Settings(BaseSettings):
     # dashboard Buy/Close buttons through the moomoo OpenD gateway.
     dashboard_trade_mode: str = os.getenv("DASHBOARD_TRADE_MODE", "paper").lower()
 
+    # --- Session risk ---
+    # Hard no-overnight rule: block entries after the cutoff and force-flatten
+    # before the bell. Overnight gaps cannot be stopped out of -- there are no
+    # prices between the close and the open -- so this is on by default and
+    # should stay on.
+    enforce_no_overnight: bool = (
+        os.getenv("ENFORCE_NO_OVERNIGHT", "true").lower() == "true"
+    )
+
+    # --- Tunnel pointer (stable Railway front door -> ephemeral tunnel) ---
+    # Shared secret the home launcher uses to publish its current tunnel URL.
+    # Unset means the update endpoint refuses all writes, which is the safe
+    # default: an open endpoint could repoint the bookmark at a phishing page.
+    tunnel_update_secret: str = os.getenv("TUNNEL_UPDATE_SECRET", "")
+    # Optional extra host to allow as a redirect target (a named tunnel).
+    tunnel_custom_domain: str = os.getenv("TUNNEL_CUSTOM_DOMAIN", "")
+    # Public base URL of the Railway deployment, used by the launcher.
+    tunnel_publish_url: str = os.getenv("TUNNEL_PUBLISH_URL", "")
+
+    # --- Dashboard access control ---
+    # Required before exposing the UI over a tunnel: the dashboard can place
+    # live orders, so an open public URL is an open brokerage account.
+    dashboard_user: str = os.getenv("DASHBOARD_USER", "trader")
+    dashboard_password: str = os.getenv("DASHBOARD_PASSWORD", "")
+
     # Train models automatically on startup if none exist and a token is set.
     auto_train_on_start: bool = (
         os.getenv("AUTO_TRAIN_ON_START", "true").lower() == "true"

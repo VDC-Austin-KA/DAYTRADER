@@ -37,7 +37,19 @@ header {
   font-size: 12px; color: var(--muted);
   border: 1px solid var(--border); padding: 2px 8px; border-radius: 12px;
 }
-.header-actions { display: flex; gap: 10px; }
+.header-actions { display: flex; gap: 10px; align-items: center; }
+
+.qty-field {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.qty-field input {
+  width: 58px; padding: 7px 8px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel);
+  color: var(--text); font-size: 13px; font-weight: 600; text-align: center;
+}
+.qty-field input:focus { outline: none; border-color: var(--blue); }
 
 .btn {
   background: var(--blue); color: #fff; border: none; padding: 8px 14px;
@@ -181,3 +193,27 @@ th.sortable:hover { color: #fff; }
   background: #0e1626; color: inherit;
   border: 1px solid var(--border, #243044); border-radius: 6px;
 }
+
+/* --- Pinned open-positions panel -------------------------------------- */
+/* Closing a live position is the most time-critical action on the page, so
+   it sits at the top and sticks there while the rest of the page scrolls. */
+.positions-pinned {
+  position: sticky; top: 0; z-index: 20;
+  border: 1px solid var(--blue);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .45);
+}
+.positions-pinned .panel-head { align-items: center; }
+
+/* --- Per-row quantity + Buy ------------------------------------------- */
+/* Size is set beside the trade rather than in a header field that may be
+   scrolled off screen. */
+.buy-cell { display: flex; gap: 6px; align-items: center; }
+.buy-cell .row-qty {
+  width: 52px; padding: 5px 6px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg);
+  color: var(--text); font-size: 12px; font-weight: 600; text-align: center;
+}
+.buy-cell .row-qty:focus { outline: none; border-color: var(--blue); }
+.buy-cell .row-qty::-webkit-outer-spin-button,
+.buy-cell .row-qty::-webkit-inner-spin-button { opacity: 1; }
+.pos-actions { display: flex; gap: 6px; white-space: nowrap; }

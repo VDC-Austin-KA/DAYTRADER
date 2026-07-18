@@ -32,6 +32,23 @@ def get_db():
         db.close()
 
 
+def rebind(url: str) -> None:
+    """Point the engine and session factory at a different database.
+
+    Use this instead of ``importlib.reload(database)``. A reload builds a
+    brand-new ``Base``, orphaning every model class that was declared
+    against the old one -- ``init_db()`` then creates tables from empty
+    metadata and the next query fails with "no such table". Rebinding
+    swaps only the engine, so the mappings stay intact.
+    """
+    global engine
+
+    args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+    engine.dispose()
+    engine = create_engine(url, pool_pre_ping=True, connect_args=args)
+    SessionLocal.configure(bind=engine)
+
+
 def init_db() -> None:
     """Create tables if they do not already exist."""
     from . import models  # noqa: F401  (ensure models are registered)

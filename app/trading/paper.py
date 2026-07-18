@@ -64,6 +64,21 @@ def open_position(
     if cost > portfolio.cash:
         return None, f"Insufficient cash: need ${cost:,.2f}, have ${portfolio.cash:,.2f}."
 
+    # Route to the real moomoo account when the dashboard is in live mode.
+    broker_note = ""
+    if settings.dashboard_trade_mode == "moomoo":
+        from . import moomoo_orders
+
+        res = moomoo_orders.place_option_order(
+            symbol.upper(), contract_symbol, "BUY", quantity, price
+        )
+        if not res.ok:
+            return None, f"moomoo order failed: {res.message}"
+        if res.filled_price:
+            price = res.filled_price
+            cost = price * quantity * 100
+        broker_note = f" [moomoo #{res.order_id}]"
+
     underlying = md.get_quote(symbol) or 0.0
     pos = Position(
         portfolio_id=portfolio.id,
@@ -76,7 +91,7 @@ def open_position(
         entry_price=price,
         entry_underlying=underlying,
         current_price=price,
-        note=note,
+        note=(note + broker_note).strip(),
     )
     portfolio.cash -= cost
     db.add(pos)
@@ -112,6 +127,19 @@ def close_position(db: Session, portfolio: Portfolio, position_id: int,
         )
         if price is None:
             price = pos.current_price
+
+    # Sell to close through the real account when in live mode.
+    if settings.dashboard_trade_mode == "moomoo":
+        from . import moomoo_orders
+
+        res = moomoo_orders.place_option_order(
+            pos.symbol, pos.contract_symbol, "SELL", pos.quantity, price
+        )
+        if not res.ok:
+            return False, f"moomoo close failed: {res.message}"
+        if res.filled_price:
+            price = res.filled_price
+
     proceeds = price * pos.quantity * 100
     realized = proceeds - pos.cost_basis
 

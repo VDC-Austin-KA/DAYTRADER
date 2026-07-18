@@ -228,7 +228,12 @@ async function runScan() {
   }
 }
 
+let _liveTradeMode = false;
+
 async function buyOpportunity(o) {
+  if (_liveTradeMode && !confirm(
+    `LIVE order to your moomoo account:\nBuy 1 ${o.symbol} ${o.option_type} $${o.strike} @ ~$${(o.mid ?? 0).toFixed(2)}.\nProceed?`
+  )) return;
   try {
     const r = await api("/api/trade", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -246,6 +251,30 @@ async function buyOpportunity(o) {
 
 $("#scan-btn").addEventListener("click", runScan);
 $("#scan-symbol").addEventListener("keydown", (e) => { if (e.key === "Enter") runScan(); });
+
+// --- Trade-mode indicator (paper vs live moomoo) ---
+async function showTradeMode() {
+  try {
+    const c = await api("/api/config");
+    let el = $("#trade-mode-pill");
+    if (!el) {
+      el = document.createElement("span");
+      el.id = "trade-mode-pill";
+      el.className = "pill";
+      const actions = document.querySelector(".header-actions");
+      if (actions) actions.prepend(el);
+    }
+    const live = c.dashboard_trade_mode === "moomoo";
+    _liveTradeMode = live;
+    el.textContent = live ? "● LIVE moomoo" : "○ paper";
+    el.className = "pill " + (live ? "bearish" : "neutral");
+    el.title = live
+      ? "Buy/Close route to your moomoo account via OpenD"
+      : "Trades simulated locally. Set DASHBOARD_TRADE_MODE=moomoo to route to your account.";
+    const prov = document.querySelector(".header-actions");
+    if (prov && c.in_open_window) el.textContent += " · open-window";
+  } catch (e) { /* ignore */ }
+}
 
 // --- Data-source status banner ---
 async function checkDataSource() {
@@ -452,6 +481,7 @@ $("#movers-refresh").addEventListener("click", () => loadMovers(true));
 initMoversTable();
 
 // Initial load.
+showTradeMode();
 checkDataSource();
 loadSummary();
 loadSignals();

@@ -32,6 +32,32 @@ def refresh_all_signals() -> None:
         db.close()
 
 
+def open_window_refresh() -> None:
+    """Fast refresh that only fires inside the opening focus window.
+
+    Re-scans the movers universe (bypassing its cache) and re-marks open
+    positions so the dashboard is seconds-fresh during 08:29-09:00 CT
+    without polling the APIs hard the rest of the day.
+    """
+    from .data import market_data as md
+
+    if not md.in_open_window():
+        return
+    try:
+        from .trading import movers
+
+        movers.scan_universe(refresh=True)
+    except Exception:
+        log.exception("open-window movers rescan failed")
+    db = SessionLocal()
+    try:
+        paper.mark_to_market(db, paper.get_or_create_portfolio(db))
+    except Exception:
+        log.exception("open-window mark-to-market failed")
+    finally:
+        db.close()
+
+
 def bootstrap() -> None:
     """One-time startup task: train models if none exist, then refresh signals.
 
@@ -81,6 +107,23 @@ def start_scheduler() -> None:
             settings.prediction_cycle_seconds,
             settings.prediction_trade_mode,
         )
+    # Opening focus window: frequent rescan, self-gated to weekdays
+    # 08:29-09:00 in the configured tz (job itself no-ops outside it).
+    _scheduler.add_job(
+        open_window_refresh,
+        "interval",
+        seconds=settings.movers_window_refresh_seconds,
+        id="open_window_refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    log.info(
+        "opening-window rescan every %ss, active %s-%s %s",
+        settings.movers_window_refresh_seconds,
+        settings.movers_window_start, settings.movers_window_end,
+        settings.movers_window_tz,
+    )
     # Weekly retrain (Sunday 06:00 UTC).
     _scheduler.add_job(
         lambda: train_universe(SessionLocal()),

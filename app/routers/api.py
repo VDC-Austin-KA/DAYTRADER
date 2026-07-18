@@ -37,6 +37,8 @@ def train_status():
 
 @router.get("/config")
 def config():
+    from ..data import market_data as md
+
     return {
         "max_dte": settings.max_dte,
         "min_dte": settings.min_dte,
@@ -44,6 +46,13 @@ def config():
         "horizon_days": settings.horizon_days,
         "target_move": settings.target_move,
         "watchlist": settings.default_watchlist,
+        "data_provider": settings.data_provider,
+        "dashboard_trade_mode": settings.dashboard_trade_mode,
+        "in_open_window": md.in_open_window(),
+        "open_window": (
+            f"{settings.movers_window_start}-{settings.movers_window_end} "
+            f"{settings.movers_window_tz}"
+        ),
     }
 
 
@@ -136,7 +145,8 @@ def opportunities(
 ):
     """Rank cheap, short-dated options for a ticker by success x potential return."""
     if not settings.has_data_source:
-        raise HTTPException(400, "No market-data source configured (set TRADIER_TOKEN).")
+        raise HTTPException(400, "No market-data source configured (start moomoo "
+                                 "OpenD + set MOOMOO_OPEND_HOST, or set TRADIER_TOKEN).")
     if side not in ("both", "call", "put"):
         raise HTTPException(422, "side must be both/call/put")
     from ..trading import opportunities as opp
@@ -155,7 +165,8 @@ def movers(refresh: bool = False):
     """Universe-wide movers scan: Surge Scores, globally ranked options,
     suggested plays, and headline items for the ticker bar."""
     if not settings.has_data_source:
-        raise HTTPException(400, "No market-data source configured (set TRADIER_TOKEN).")
+        raise HTTPException(400, "No market-data source configured (start moomoo "
+                                 "OpenD + set MOOMOO_OPEND_HOST, or set TRADIER_TOKEN).")
     from ..trading import movers as mv
 
     return mv.scan_universe(refresh=refresh)

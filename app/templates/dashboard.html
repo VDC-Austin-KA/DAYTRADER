@@ -24,6 +24,18 @@
     </div>
   </header>
 
+  <nav class="tabbar" id="tabbar">
+    <button class="tab active" data-tab="trade">Trade</button>
+    <button class="tab" data-tab="movers">Movers</button>
+    <button class="tab" data-tab="chart">Chart</button>
+    <button class="tab" data-tab="news">News</button>
+    <button class="tab" data-tab="models">Models</button>
+    <span class="tab-spacer"></span>
+    <button id="density-btn" class="tab ghost" title="Toggle compact text">Aa</button>
+    <button id="cols-btn" class="tab ghost" title="Show/hide columns">Cols</button>
+  </nav>
+  <div id="cols-panel" class="cols-panel" hidden></div>
+
   <div id="headline-bar" class="headline-bar hidden">
     <span class="headline-label">⚡ LIVE</span>
     <div class="headline-track"><div id="headline-items" class="headline-items"></div></div>
@@ -40,7 +52,7 @@
   <main>
     <!-- Live broker state first: open trades and working orders are what you
          act on. The account strip below is reference, so it stays compact. -->
-    <section class="panel live-panel" id="broker-positions-panel" hidden>
+    <section data-view="trade" class="panel live-panel" id="broker-positions-panel" hidden>
       <div class="panel-head">
         <h2>📈 Open Trades <span class="muted">— live from moomoo</span></h2>
         <button id="broker-flatten" class="btn sm red">Close all</button>
@@ -56,7 +68,7 @@
       </div>
     </section>
 
-    <section class="panel live-panel" id="broker-orders-panel" hidden>
+    <section data-view="trade" class="panel live-panel" id="broker-orders-panel" hidden>
       <div class="panel-head">
         <h2>📋 Working Orders <span class="muted">— cancel or edit</span></h2>
         <button id="orders-refresh" class="btn ghost sm">Refresh</button>
@@ -73,7 +85,7 @@
     </section>
 
     <!-- Real account balances, compact. -->
-    <section class="account-strip" id="account-strip"></section>
+    <section data-view="trade" class="account-strip" id="account-strip"></section>
 
     <details class="paper-fold">
       <summary>Paper-trading simulator <span class="muted">(not your real account)</span></summary>
@@ -86,7 +98,7 @@
     <!-- Open positions ride at the top and stay put: closing a live position
          is the most time-critical action on this page, so it must never be
          a scroll away. Hidden entirely when flat, to stay out of the way. -->
-    <section class="panel positions-pinned" id="positions-panel" hidden>
+    <section data-view="trade" class="panel positions-pinned" id="positions-panel" hidden>
       <div class="panel-head">
         <h2>📌 Open Positions <span class="muted">— click Close to exit</span></h2>
         <button id="close-all-btn" class="btn sm red">Close all</button>
@@ -100,7 +112,7 @@
       </table>
     </section>
 
-    <section class="panel movers">
+    <section data-view="movers" class="panel movers">
       <div class="panel-head">
         <h2>🔥 Market Movers <span class="muted">— best options across the whole universe, ranked by blended profit likelihood</span></h2>
         <span id="movers-filter-count" class="muted"></span>
@@ -137,7 +149,7 @@
       </div>
     </section>
 
-    <section class="panel scanner">
+    <section data-view="movers" class="panel scanner">
       <div class="panel-head">
         <h2>🎯 Opportunity Scanner <span class="muted">— cheap short-dated options, one ticker</span></h2>
       </div>
@@ -187,7 +199,7 @@
     <!-- TradingView Advanced Chart: free embed, and it already carries
          extended hours plus RSI and Awesome Oscillator as native studies,
          which is strictly better than reimplementing them in Chart.js. -->
-    <section class="panel tv-panel">
+    <section data-view="chart" class="panel tv-panel">
       <div class="panel-head">
         <h2>📊 Chart <span class="muted">— premarket + RTH, RSI, Awesome Oscillator</span></h2>
         <div class="tv-controls">
@@ -247,7 +259,27 @@
       </section>
     </div>
 
-    <section class="panel">
+    <section class="panel" data-view="news">
+      <div class="panel-head">
+        <h2>📰 Market-Moving News</h2>
+        <button id="news-refresh" class="btn ghost sm">Refresh</button>
+      </div>
+      <div id="news-list" class="news-list muted">Loading…</div>
+    </section>
+
+    <section class="panel" data-view="news">
+      <div class="panel-head"><h2>📅 Economic Calendar</h2></div>
+      <div class="table-scroll">
+        <table id="calendar-table">
+          <thead><tr><th>Date</th><th>Time ET</th><th>Event</th>
+            <th>Expected</th><th>Actual</th><th>Previous</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="calendar-note" class="muted"></div>
+    </section>
+
+    <section class="panel" data-view="trade">
       <div class="panel-head"><h2>Recent Trades</h2></div>
       <table id="trades-table">
         <thead>

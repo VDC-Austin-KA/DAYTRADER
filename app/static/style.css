@@ -294,3 +294,55 @@ select.col-filter {
   width: 100%; font-size: 11px; padding: 3px 4px; border-radius: 5px;
   border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
 }
+
+/* --- Tabs / mobile density --------------------------------------------- */
+.tabbar {
+  display: flex; gap: 4px; align-items: center; padding: 6px 12px;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 30; overflow-x: auto;
+}
+.tab {
+  flex: 0 0 auto; background: transparent; border: 1px solid transparent;
+  color: var(--muted); padding: 7px 14px; border-radius: 8px;
+  font-weight: 700; font-size: 13px; cursor: pointer;
+}
+.tab.active { background: var(--blue); color: #fff; }
+.tab.ghost { border-color: var(--border); font-size: 12px; padding: 6px 10px; }
+.tab-spacer { flex: 1; }
+.cols-panel {
+  display: flex; flex-wrap: wrap; gap: 8px 14px;
+  padding: 10px 14px; background: var(--panel-2);
+  border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.cols-panel label { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+
+/* Compact mode: fit far more rows on a portrait phone. */
+body.dense { font-size: 12px; }
+body.dense table { font-size: 11px; }
+body.dense th, body.dense td { padding: 4px 4px; }
+body.dense .card .value { font-size: 18px; }
+body.dense .panel { padding: 10px; }
+body.dense .acct-item { padding: 5px 9px; }
+body.dense .acct-item b { font-size: 13px; }
+body.dense #tv-chart-container { height: 380px; }
+
+/* --- News --------------------------------------------------------------- */
+.news-list { display: flex; flex-direction: column; gap: 6px; }
+.news-item {
+  display: flex; gap: 10px; align-items: baseline; padding: 8px 10px;
+  border-radius: 8px; background: var(--panel-2); text-decoration: none;
+  color: var(--text); font-size: 13px; border-left: 3px solid transparent;
+}
+.news-item:hover { background: #1d2637; }
+.news-item.hi { border-left-color: var(--red); }
+.news-item.mid { border-left-color: var(--yellow); }
+.news-src { flex: 0 0 auto; font-size: 11px; color: var(--muted); min-width: 76px; }
+.news-title { flex: 1; }
+.news-impact {
+  flex: 0 0 auto; font-size: 11px; font-weight: 700; color: var(--yellow);
+}
+@media (max-width: 700px) {
+  main { padding: 12px 10px; }
+  .news-item { flex-wrap: wrap; }
+  .news-src { min-width: 0; }
+}

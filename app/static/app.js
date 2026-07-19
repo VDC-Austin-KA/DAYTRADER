@@ -922,3 +922,111 @@ function loadTradingView() {
   if (el) el.addEventListener("change", loadTradingView);
 });
 loadTradingView();
+
+// ---------------------------------------------------------------------------
+// Mobile: tabs, column toggles, density. A portrait iPhone cannot show a
+// 15-column table and five panels at once, so the page becomes one view at
+// a time with the columns the user actually wants.
+// ---------------------------------------------------------------------------
+const VIEW_KEY = "dt.view", COLS_KEY = "dt.cols", DENSE_KEY = "dt.dense";
+
+function showView(name) {
+  document.querySelectorAll("[data-view]").forEach(el => {
+    el.hidden = el.dataset.view !== name;
+  });
+  document.querySelectorAll("#tabbar .tab[data-tab]").forEach(b => {
+    b.classList.toggle("active", b.dataset.tab === name);
+  });
+  localStorage.setItem(VIEW_KEY, name);
+  // Panels without a data-view (grid extras) belong to Models.
+  document.querySelectorAll("main > .grid").forEach(g => {
+    g.hidden = name !== "models";
+  });
+  if (name === "news") loadNews();
+}
+
+document.querySelectorAll("#tabbar .tab[data-tab]").forEach(b =>
+  b.addEventListener("click", () => showView(b.dataset.tab)));
+
+// --- Column visibility (movers table) -------------------------------------
+function hiddenCols() {
+  try { return new Set(JSON.parse(localStorage.getItem(COLS_KEY) || "[]")); }
+  catch { return new Set(); }
+}
+
+function applyCols() {
+  const hide = hiddenCols();
+  const ths = [...document.querySelectorAll("#movers-table thead tr:first-child th")];
+  ths.forEach((th, i) => {
+    const off = hide.has(th.dataset.k || String(i));
+    th.style.display = off ? "none" : "";
+    document.querySelectorAll("#movers-table tr").forEach(tr => {
+      const cell = tr.children[i];
+      if (cell) cell.style.display = off ? "none" : "";
+    });
+  });
+}
+
+function buildColsPanel() {
+  const panel = $("#cols-panel");
+  const ths = [...document.querySelectorAll("#movers-table thead tr:first-child th")];
+  const hide = hiddenCols();
+  panel.innerHTML = ths.map((th, i) => {
+    const key = th.dataset.k || String(i);
+    const label = th.textContent.trim() || "Buy";
+    return `<label><input type="checkbox" data-col="${key}"
+      ${hide.has(key) ? "" : "checked"}> ${label}</label>`;
+  }).join("");
+  panel.addEventListener("change", e => {
+    if (!e.target.dataset.col) return;
+    const h = hiddenCols();
+    e.target.checked ? h.delete(e.target.dataset.col) : h.add(e.target.dataset.col);
+    localStorage.setItem(COLS_KEY, JSON.stringify([...h]));
+    applyCols();
+  });
+}
+
+$("#cols-btn").addEventListener("click", () => {
+  const p = $("#cols-panel");
+  if (!p.innerHTML) buildColsPanel();
+  p.hidden = !p.hidden;
+});
+
+// --- Density ---------------------------------------------------------------
+function applyDensity() {
+  document.body.classList.toggle("dense", localStorage.getItem(DENSE_KEY) === "1");
+}
+$("#density-btn").addEventListener("click", () => {
+  localStorage.setItem(DENSE_KEY,
+    localStorage.getItem(DENSE_KEY) === "1" ? "0" : "1");
+  applyDensity();
+});
+
+// --- News / calendar -------------------------------------------------------
+async function loadNews(refresh = false) {
+  try {
+    const r = await api(`/api/news?limit=30${refresh ? "&refresh=true" : ""}`);
+    $("#news-list").innerHTML = (r.items || []).map(n => {
+      const cls = n.impact >= 3 ? "hi" : n.impact >= 2 ? "mid" : "";
+      return `<a class="news-item ${cls}" href="${n.link}" target="_blank" rel="noopener">
+        <span class="news-src">${n.source}</span>
+        <span class="news-title">${n.title}</span>
+        ${n.impact ? `<span class="news-impact">${n.impact.toFixed(0)}</span>` : ""}
+      </a>`;
+    }).join("") || "No headlines.";
+  } catch (e) { $("#news-list").textContent = e.message; }
+  try {
+    const c = await api("/api/calendar?days=21");
+    $("#calendar-table tbody").innerHTML = (c.events || []).map(e => `
+      <tr><td>${e.date}</td><td>${e.time_et}</td><td>${e.event}</td>
+        <td>${e.expected ?? "—"}</td><td>${e.actual ?? "—"}</td>
+        <td>${e.previous ?? "—"}</td></tr>`).join("");
+    $("#calendar-note").textContent = c.note || "";
+  } catch (e) { /* leave empty */ }
+}
+$("#news-refresh").addEventListener("click", () => loadNews(true));
+
+applyDensity();
+showView(localStorage.getItem(VIEW_KEY) || "trade");
+const _origDraw = drawMoversTable;
+drawMoversTable = function () { _origDraw.apply(this, arguments); applyCols(); };

@@ -339,6 +339,20 @@ def flip(req: CloseRequest, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/news")
+def news(limit: int = 25, refresh: bool = False):
+    from ..data import newsfeed
+
+    return {"items": newsfeed.get_news(limit=limit, refresh=refresh)}
+
+
+@router.get("/calendar")
+def calendar(days: int = 14):
+    from ..data import newsfeed
+
+    return newsfeed.get_calendar(days=days)
+
+
 @router.get("/universe")
 def universe(refresh: bool = False, limit: int = 18):
     """Today's dynamic movers universe with the scores that put each name

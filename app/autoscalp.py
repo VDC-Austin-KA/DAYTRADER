@@ -48,17 +48,21 @@ from .config import settings
 
 log = logging.getLogger("daytrader.autoscalp")
 
-# --- Tunables (env-overridable) -----------------------------------------
-UNDERLYING = os.getenv("SCALPER_UNDERLYING", "SPY")
-ENTRY_BURST = float(os.getenv("SCALPER_ENTRY_BURST", "0.0008"))   # 8 bps
-BURST_WINDOW = float(os.getenv("SCALPER_BURST_WINDOW", "45"))     # seconds
-COOLDOWN = float(os.getenv("SCALPER_COOLDOWN", "120"))            # seconds
-QTY = int(os.getenv("SCALPER_QTY", "5"))
-TRADE_MODE = os.getenv("SCALPER_TRADE_MODE", "paper").lower()
+# --- Tunables ------------------------------------------------------------
+# Read from settings, NOT os.getenv: pydantic-settings parses .env but does
+# not populate os.environ, so module-level os.getenv silently ignored every
+# value set in .env -- including the paper/live switch, which would have
+# stayed "paper" while the file said "live".
+UNDERLYING = settings.scalper_underlying
+ENTRY_BURST = settings.scalper_entry_burst
+BURST_WINDOW = settings.scalper_burst_window
+COOLDOWN = settings.scalper_cooldown
+QTY = settings.scalper_qty
+TRADE_MODE = settings.scalper_trade_mode
 # Daily circuit breaker: once today's realized P&L is at or below -this,
 # no more entries until tomorrow. Exits keep running -- the breaker stops
 # digging, it never blocks getting out.
-MAX_DAILY_LOSS = float(os.getenv("SCALPER_MAX_DAILY_LOSS", "200"))
+MAX_DAILY_LOSS = settings.scalper_max_daily_loss
 RESUBSCRIBE_SECS = 60.0        # refresh ATM strikes this often
 
 

@@ -12,16 +12,28 @@ def _reset():
 
 
 def test_burst_up_and_down(monkeypatch):
+    """Threshold comes from settings, so size the move off it rather than
+    hard-coding bps -- otherwise retuning the live config breaks the test."""
+    _reset()
+    now = time.time()
+    monkeypatch.setattr(time, "time", lambda: now)
+    trigger = autoscalp.ENTRY_BURST * 1.2      # comfortably over the line
+    autoscalp._record_spot(743.00)
+    autoscalp._record_spot(743.00 * (1 + trigger))
+    assert autoscalp.detect_burst() == "up"
+    _reset()
+    autoscalp._record_spot(743.00)
+    autoscalp._record_spot(743.00 * (1 - trigger))
+    assert autoscalp.detect_burst() == "down"
+
+
+def test_move_below_threshold_does_not_fire(monkeypatch):
     _reset()
     now = time.time()
     monkeypatch.setattr(time, "time", lambda: now)
     autoscalp._record_spot(743.00)
-    autoscalp._record_spot(743.70)          # +9.4 bps inside the window
-    assert autoscalp.detect_burst() == "up"
-    _reset()
-    autoscalp._record_spot(743.00)
-    autoscalp._record_spot(742.30)
-    assert autoscalp.detect_burst() == "down"
+    autoscalp._record_spot(743.00 * (1 + autoscalp.ENTRY_BURST * 0.5))
+    assert autoscalp.detect_burst() is None
 
 
 def test_slow_drift_does_not_fire(monkeypatch):

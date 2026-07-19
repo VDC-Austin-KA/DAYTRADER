@@ -339,6 +339,18 @@ def flip(req: CloseRequest, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/intraday/{symbol}")
+def intraday(symbol: str, interval: str = "1m", extended: bool = True):
+    """Intraday OHLCV with premarket/after-hours plus RSI and AO."""
+    from ..data import intraday as iday
+
+    data = iday.get_intraday(symbol.upper(), interval=interval,
+                             extended=extended)
+    if not data["bars"] and data.get("message"):
+        raise HTTPException(404, data["message"])
+    return data
+
+
 @router.get("/notifications")
 def notifications(after: int = 0):
     """Trade events since ``after``. Polled by the dashboard so no order

@@ -529,6 +529,7 @@ function moversRowHtml(o) {
     <td>${o.direction}</td>
     <td>${o.whipsaw ? 'yes' : ''}</td>
     <td>${o.blended_score.toFixed(3)}</td>
+    <td class="px-contract" title="mid $${(o.mid ?? 0).toFixed(2)} x 100">$${((o.mid ?? 0) * 100).toFixed(0)}</td>
     <td>${buyCell(o)}</td>
   </tr>`;
 }
@@ -547,7 +548,7 @@ function drawMoversTable() {
   });
   $("#movers-table tbody").innerHTML = rows.length
     ? rows.map(moversRowHtml).join("")
-    : `<tr><td colspan="14" class="muted">Nothing matches the filters.</td></tr>`;
+    : `<tr><td colspan="15" class="muted">Nothing matches the filters.</td></tr>`;
 }
 
 function initMoversTable() {
@@ -586,7 +587,7 @@ async function loadMovers(refresh = false) {
       ` · updated ${new Date(r.generated_at * 1000).toLocaleTimeString()}`;
   } catch (e) {
     meta.textContent = "";
-    $("#movers-table tbody").innerHTML = `<tr><td colspan="14" class="neg">${e.message}</td></tr>`;
+    $("#movers-table tbody").innerHTML = `<tr><td colspan="15" class="neg">${e.message}</td></tr>`;
   }
 }
 
@@ -795,3 +796,49 @@ api("/api/notifications?after=0")
   })
   .catch(() => {});
 setInterval(pollNotifications, 3000);
+
+// ---------------------------------------------------------------------------
+// TradingView Advanced Chart. Their widget already provides extended-hours
+// sessions and RSI / Awesome Oscillator as native studies, so embedding it
+// beats reimplementing those in Chart.js -- and it brings drawing tools and
+// the full indicator library for free.
+// ---------------------------------------------------------------------------
+function loadTradingView() {
+  const container = $("#tv-chart-container");
+  if (!container) return;
+  const symbol = ($("#tv-symbol").value || "SPY").trim().toUpperCase();
+  const interval = $("#tv-interval").value;
+  const extended = $("#tv-extended").checked;
+
+  container.innerHTML = "";
+  const script = document.createElement("script");
+  script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+  script.async = true;
+  script.innerHTML = JSON.stringify({
+    autosize: true,
+    symbol,
+    interval,
+    timezone: "America/Chicago",
+    theme: "dark",
+    style: "1",                    // candles
+    locale: "en",
+    // "extended" includes premarket and after-hours; "regular" is RTH only.
+    session: extended ? "extended" : "regular",
+    withdateranges: true,
+    hide_side_toolbar: false,
+    allow_symbol_change: true,
+    studies: [
+      "Volume@tv-basicstudies",
+      "RSI@tv-basicstudies",
+      "AwesomeOscillator@tv-basicstudies",
+    ],
+    support_host: "https://www.tradingview.com",
+  });
+  container.appendChild(script);
+}
+
+["#tv-symbol", "#tv-interval", "#tv-extended"].forEach(sel => {
+  const el = $(sel);
+  if (el) el.addEventListener("change", loadTradingView);
+});
+loadTradingView();

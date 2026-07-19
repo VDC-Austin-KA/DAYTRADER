@@ -125,7 +125,8 @@
               <th data-k="prob_profit" data-num>POP</th><th data-k="success" data-num>Success</th>
               <th data-k="potential_return" data-num>Potential</th>
               <th data-k="surge" data-num>Surge</th><th data-k="direction">Dir</th>
-              <th data-k="whipsaw">Whipsaw</th><th data-k="blended_score" data-num>Score</th><th></th>
+              <th data-k="whipsaw">Whipsaw</th><th data-k="blended_score" data-num>Score</th>
+              <th data-k="cost" data-num title="Premium per contract (mid x 100)">$/Contract</th><th></th>
             </tr>
             <tr class="filter-row"></tr>
           </thead>
@@ -179,6 +180,32 @@
           <tbody></tbody>
         </table>
       </div>
+    </section>
+
+    <!-- TradingView Advanced Chart: free embed, and it already carries
+         extended hours plus RSI and Awesome Oscillator as native studies,
+         which is strictly better than reimplementing them in Chart.js. -->
+    <section class="panel tv-panel">
+      <div class="panel-head">
+        <h2>📊 Chart <span class="muted">— premarket + RTH, RSI, Awesome Oscillator</span></h2>
+        <div class="tv-controls">
+          <input id="tv-symbol" type="text" value="SPY" spellcheck="false"
+                 title="Ticker">
+          <select id="tv-interval" title="Interval">
+            <option value="1">1m</option>
+            <option value="3">3m</option>
+            <option value="5">5m</option>
+            <option value="15">15m</option>
+            <option value="30">30m</option>
+            <option value="60">1h</option>
+            <option value="D">1D</option>
+          </select>
+          <label class="tv-ext" title="Include premarket and after-hours">
+            <input id="tv-extended" type="checkbox" checked> Ext hours
+          </label>
+        </div>
+      </div>
+      <div id="tv-chart-container"></div>
     </section>
 
     <div class="grid">

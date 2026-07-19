@@ -275,3 +275,16 @@ th.sortable:hover { color: #fff; }
   .trade-alert { flex-wrap: wrap; gap: 4px 10px; }
   .trade-alert span { flex-basis: 100%; }
 }
+
+/* --- TradingView panel -------------------------------------------------- */
+.tv-panel { margin-bottom: 16px; }
+.tv-controls { display: flex; gap: 8px; align-items: center; }
+.tv-controls input[type="text"] {
+  width: 80px; padding: 6px 8px; border-radius: 8px; text-transform: uppercase;
+  border: 1px solid var(--border); background: var(--panel-2);
+  color: var(--text); font-weight: 700; font-size: 13px;
+}
+.tv-ext { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+#tv-chart-container { height: 620px; width: 100%; }
+@media (max-width: 700px) { #tv-chart-container { height: 460px; } }
+.px-contract { font-weight: 700; white-space: nowrap; }

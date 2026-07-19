@@ -339,6 +339,28 @@ def flip(req: CloseRequest, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/gamma/{symbol}")
+def gamma_profile(symbol: str, expiry: str | None = None):
+    """Dealer gamma exposure: which regime the tape is in right now.
+
+    Not a directional call -- it says whether dealer hedging is currently
+    dampening moves (reversion) or amplifying them (momentum).
+    """
+    from ..trading import gamma as gx
+
+    prof = gx.compute_gamma_profile(symbol.upper(), expiry)
+    if prof is None:
+        raise HTTPException(404, f"No gamma data for {symbol}.")
+    return {
+        "symbol": prof.symbol, "spot": prof.spot, "expiry": prof.expiry,
+        "total_gex": prof.total_gex, "call_gex": prof.call_gex,
+        "put_gex": prof.put_gex, "flip_point": prof.flip_point,
+        "pin_strike": prof.largest_strike, "regime": prof.regime,
+        "summary": prof.describe(),
+        "by_strike": prof.by_strike[:60],
+    }
+
+
 # --- Live moomoo account (real balances, positions, working orders) ---
 
 @router.get("/account")

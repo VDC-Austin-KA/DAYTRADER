@@ -73,6 +73,26 @@ def open_position(
             return None, f"Entry blocked: {why}."
 
     cost = price * quantity * 100
+
+    # Live-money sizing cap. The browser caps the input too, but that is
+    # advisory -- anyone can retype it, and a stale page carries a stale
+    # limit. This is the check that actually binds. Two thirds, not all, so
+    # a third of buying power stays free for manual trades in the moomoo app.
+    if settings.dashboard_trade_mode == "moomoo":
+        from . import moomoo_account
+
+        acct = moomoo_account.account_summary()
+        bp = float(acct.get("us_buying_power") or 0) if acct.get("ok") else 0.0
+        if bp > 0:
+            usable = bp * settings.buying_power_fraction
+            if cost > usable:
+                affordable = int(usable / (price * 100)) if price > 0 else 0
+                return None, (
+                    f"Order ${cost:,.2f} exceeds the ${usable:,.2f} sizing cap "
+                    f"({settings.buying_power_fraction:.0%} of ${bp:,.2f} buying "
+                    f"power). Max here is {affordable} contract(s)."
+                )
+
     if cost > portfolio.cash:
         return None, f"Insufficient cash: need ${cost:,.2f}, have ${portfolio.cash:,.2f}."
 
@@ -124,7 +144,15 @@ def open_position(
 
 
 def close_position(db: Session, portfolio: Portfolio, position_id: int,
-                   price: Optional[float] = None) -> tuple[bool, str]:
+                   price: Optional[float] = None,
+                   quantity: Optional[int] = None,
+                   note: str = "") -> tuple[bool, str]:
+    """Close a position, or part of one.
+
+    ``quantity`` closes only that many contracts (the bracket monitor's
+    scale-out); omitted closes everything. Partial closes keep the same
+    entry price on the remainder so P&L stays honest.
+    """
     pos = (
         db.query(Position)
         .filter(Position.id == position_id, Position.portfolio_id == portfolio.id)
@@ -132,6 +160,10 @@ def close_position(db: Session, portfolio: Portfolio, position_id: int,
     )
     if pos is None or pos.status != "open":
         return False, "Position not found or already closed."
+
+    qty = pos.quantity if quantity is None else int(quantity)
+    if qty <= 0 or qty > pos.quantity:
+        return False, f"Invalid close quantity {qty} (position has {pos.quantity})."
 
     if price is None:
         price = _contract_price(
@@ -145,19 +177,24 @@ def close_position(db: Session, portfolio: Portfolio, position_id: int,
         from . import moomoo_orders
 
         res = moomoo_orders.place_option_order(
-            pos.symbol, pos.contract_symbol, "SELL", pos.quantity, price
+            pos.symbol, pos.contract_symbol, "SELL", qty, price
         )
         if not res.ok:
             return False, f"moomoo close failed: {res.message}"
         if res.filled_price:
             price = res.filled_price
 
-    proceeds = price * pos.quantity * 100
-    realized = proceeds - pos.cost_basis
+    proceeds = price * qty * 100
+    # Cost of just the contracts being closed; entry price is unchanged.
+    realized = proceeds - pos.entry_price * qty * 100
 
     portfolio.cash += proceeds
-    pos.status = "closed"
     pos.current_price = price
+    if qty == pos.quantity:
+        pos.status = "closed"
+    pos.quantity -= qty
+    if pos.quantity == 0:
+        pos.status = "closed"
     db.add(
         Trade(
             portfolio_id=portfolio.id,
@@ -165,7 +202,7 @@ def close_position(db: Session, portfolio: Portfolio, position_id: int,
             contract_symbol=pos.contract_symbol,
             side="sell",
             option_type=pos.option_type,
-            quantity=pos.quantity,
+            quantity=qty,
             price=price,
             realized_pnl=realized,
         )

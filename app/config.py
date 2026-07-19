@@ -38,6 +38,28 @@ class Settings(BaseSettings):
     # dashboard Buy/Close buttons through the moomoo OpenD gateway.
     dashboard_trade_mode: str = os.getenv("DASHBOARD_TRADE_MODE", "paper").lower()
 
+    # Fraction of live US buying power this dashboard may commit to one
+    # order. The remainder stays free so manual trades placed in the moomoo
+    # app are never blocked by what the dashboard has already tied up.
+    buying_power_fraction: float = float(
+        os.getenv("BUYING_POWER_FRACTION", "0.6667")
+    )
+
+    # --- Autonomous scalper (app/autoscalp.py) ---
+    # These live here rather than as module-level os.getenv calls so that
+    # .env actually reaches them: pydantic-settings parses .env, it does not
+    # populate os.environ, so a bare os.getenv silently ignored every value
+    # set here -- including the paper/live switch.
+    scalper_trade_mode: str = os.getenv("SCALPER_TRADE_MODE", "paper").lower()
+    scalper_underlying: str = os.getenv("SCALPER_UNDERLYING", "SPY")
+    scalper_qty: int = int(os.getenv("SCALPER_QTY", "2"))
+    scalper_entry_burst: float = float(os.getenv("SCALPER_ENTRY_BURST", "0.0020"))
+    scalper_burst_window: float = float(os.getenv("SCALPER_BURST_WINDOW", "45"))
+    scalper_cooldown: float = float(os.getenv("SCALPER_COOLDOWN", "180"))
+    scalper_max_daily_loss: float = float(
+        os.getenv("SCALPER_MAX_DAILY_LOSS", "150")
+    )
+
     # --- Session risk ---
     # Hard no-overnight rule: block entries after the cutoff and force-flatten
     # before the bell. Overnight gaps cannot be stopped out of -- there are no

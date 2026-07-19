@@ -1,6 +1,8 @@
 """Scalp bracket tests -- mostly about refusing bad trades."""
 from __future__ import annotations
 
+import pytest
+
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -100,3 +102,20 @@ def test_stop_fill_reflects_slippage_through_the_trigger():
     action, price = scalp.check_triggers(b, bid=gapped, ask=gapped + 0.02)
     assert action == "stop"
     assert price == gapped, "must report the real fill, not the trigger price"
+
+
+# --- Buying-power sizing cap -------------------------------------------
+
+def test_buying_power_cap_math():
+    """Two thirds of $1,045.81 funds 6 contracts at $1.00, not 10."""
+    bp, frac = 1045.81, 2 / 3
+    usable = bp * frac
+    assert int(usable / (1.00 * 100)) == 6
+    # A third stays free for manual trades in the moomoo app.
+    assert bp - usable == pytest.approx(bp / 3, rel=1e-6)
+
+
+def test_cap_scales_with_contract_price():
+    usable = 1045.81 * (2 / 3)
+    assert int(usable / (0.50 * 100)) == 13   # cheaper contract, more of them
+    assert int(usable / (5.00 * 100)) == 1    # expensive one, barely any

@@ -144,7 +144,15 @@ def open_position(
 
 
 def close_position(db: Session, portfolio: Portfolio, position_id: int,
-                   price: Optional[float] = None) -> tuple[bool, str]:
+                   price: Optional[float] = None,
+                   quantity: Optional[int] = None,
+                   note: str = "") -> tuple[bool, str]:
+    """Close a position, or part of one.
+
+    ``quantity`` closes only that many contracts (the bracket monitor's
+    scale-out); omitted closes everything. Partial closes keep the same
+    entry price on the remainder so P&L stays honest.
+    """
     pos = (
         db.query(Position)
         .filter(Position.id == position_id, Position.portfolio_id == portfolio.id)
@@ -152,6 +160,10 @@ def close_position(db: Session, portfolio: Portfolio, position_id: int,
     )
     if pos is None or pos.status != "open":
         return False, "Position not found or already closed."
+
+    qty = pos.quantity if quantity is None else int(quantity)
+    if qty <= 0 or qty > pos.quantity:
+        return False, f"Invalid close quantity {qty} (position has {pos.quantity})."
 
     if price is None:
         price = _contract_price(
@@ -165,19 +177,24 @@ def close_position(db: Session, portfolio: Portfolio, position_id: int,
         from . import moomoo_orders
 
         res = moomoo_orders.place_option_order(
-            pos.symbol, pos.contract_symbol, "SELL", pos.quantity, price
+            pos.symbol, pos.contract_symbol, "SELL", qty, price
         )
         if not res.ok:
             return False, f"moomoo close failed: {res.message}"
         if res.filled_price:
             price = res.filled_price
 
-    proceeds = price * pos.quantity * 100
-    realized = proceeds - pos.cost_basis
+    proceeds = price * qty * 100
+    # Cost of just the contracts being closed; entry price is unchanged.
+    realized = proceeds - pos.entry_price * qty * 100
 
     portfolio.cash += proceeds
-    pos.status = "closed"
     pos.current_price = price
+    if qty == pos.quantity:
+        pos.status = "closed"
+    pos.quantity -= qty
+    if pos.quantity == 0:
+        pos.status = "closed"
     db.add(
         Trade(
             portfolio_id=portfolio.id,
@@ -185,7 +202,7 @@ def close_position(db: Session, portfolio: Portfolio, position_id: int,
             contract_symbol=pos.contract_symbol,
             side="sell",
             option_type=pos.option_type,
-            quantity=pos.quantity,
+            quantity=qty,
             price=price,
             realized_pnl=realized,
         )

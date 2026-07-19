@@ -33,6 +33,89 @@ def refresh_all_signals() -> None:
         db.close()
 
 
+# Bracket states per open position id. In-memory: a restart re-arms each
+# bracket from the position's entry price, which is stored in the DB, so
+# nothing is lost except an already-ratcheted high-water mark (the trail
+# re-learns it from subsequent quotes).
+_bracket_states: dict[int, object] = {}
+
+
+def bracket_monitor() -> None:
+    """Drive scale-out/trailing exits for every open position, on live bids.
+
+    The exit discipline the user's own tape demanded: bank half at +75%,
+    trail the rest 25% off the high, hard-stop everything at -35%. Runs
+    every few seconds during the session; each position's state machine
+    lives in ``app/trading/brackets.py``.
+    """
+    from .data import moomoo_data as mm
+    from .trading import brackets
+    from .trading import session as sess
+
+    if not sess.is_trading_day() or not mm.configured():
+        return
+    now_t = sess.now_ct().time()
+    if not (sess.MARKET_OPEN <= now_t < sess.MARKET_CLOSE):
+        return
+
+    db = SessionLocal()
+    try:
+        pf = paper.get_or_create_portfolio(db)
+        open_pos = [p for p in pf.positions if p.status == "open"]
+        # Drop states for positions that no longer exist / were closed by hand.
+        live_ids = {p.id for p in open_pos}
+        for pid in list(_bracket_states):
+            if pid not in live_ids:
+                del _bracket_states[pid]
+        if not open_pos:
+            return
+
+        # One snapshot call for every open contract -- bids, not mids.
+        codes = [p.contract_symbol for p in open_pos]
+        snap = mm._call("get_market_snapshot", codes)
+        if snap is None or len(snap) == 0:
+            return
+        bids = {str(r["code"]): float(r.get("bid_price") or 0)
+                for _, r in snap.iterrows()}
+
+        for pos in open_pos:
+            st = _bracket_states.get(pos.id)
+            if st is None:
+                st = brackets.BracketState(
+                    position_id=pos.id, entry_price=pos.entry_price,
+                    quantity=pos.quantity,
+                )
+                _bracket_states[pos.id] = st
+                log.info("bracket armed #%s %s: %s",
+                         pos.id, pos.contract_symbol, st.describe())
+            # Keep state honest if the user partially closed by hand.
+            if pos.quantity < st.remaining:
+                st.remaining = pos.quantity
+
+            bid = bids.get(pos.contract_symbol, 0.0)
+            action = brackets.check(st, bid)
+            if action.kind == "none":
+                continue
+            ok, msg = paper.close_position(
+                db, pf, pos.id, price=bid, quantity=action.sell_qty,
+                note=f"bracket {action.kind}",
+            )
+            log.warning("BRACKET %s #%s %s: %s -> %s",
+                        action.kind, pos.id, pos.contract_symbol,
+                        action.reason, msg)
+            if not ok:
+                # Failed sell (e.g. moomoo reject): un-close the state so the
+                # next tick retries rather than silently abandoning the exit.
+                st.closed = False
+                st.remaining += action.sell_qty
+                if action.kind == "scale_out":
+                    st.scaled_out = False
+    except Exception:
+        log.exception("bracket monitor sweep failed")
+    finally:
+        db.close()
+
+
 def flatten_all_positions() -> None:
     """Force-close every open position. Runs every minute; acts near the bell.
 
@@ -161,6 +244,18 @@ def start_scheduler() -> None:
         settings.movers_window_refresh_seconds,
         settings.movers_window_start, settings.movers_window_end,
         settings.movers_window_tz,
+    )
+    # Scale-out / trailing exit brackets: every 10s during the session.
+    # Fast enough for 0DTE scalps (the user's cycles run ~90s), light enough
+    # that one batched snapshot per sweep doesn't strain OpenD.
+    _scheduler.add_job(
+        bracket_monitor,
+        "interval",
+        seconds=10,
+        id="bracket_monitor",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
     # No-overnight enforcement: sweep every minute, act inside the flatten
     # window. Interval (not cron) so a restart cannot skip the one firing

@@ -252,3 +252,26 @@ th.sortable:hover { color: #fff; }
   text-transform: uppercase; letter-spacing: .04em;
 }
 .paper-fold .cards { margin-top: 12px; margin-bottom: 4px; }
+
+/* --- Live trade alerts ------------------------------------------------- */
+#trade-alerts { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.trade-alert {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; border-radius: 10px; font-size: 13px;
+  border: 1px solid; animation: alert-in .25s ease-out;
+}
+.trade-alert b { flex: 0 0 auto; }
+.trade-alert span { flex: 1; color: var(--muted); }
+.trade-alert button {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 14px;
+}
+.alert-entry { background: rgba(79,140,255,.12); border-color: var(--blue); }
+.alert-exit  { background: rgba(46,204,113,.12); border-color: var(--green); }
+.alert-warn  { background: rgba(255,206,84,.12); border-color: var(--yellow); }
+@keyframes alert-in { from { opacity: 0; transform: translateY(-6px); } }
+.trade-alert em { color: var(--muted); font-size: 11px; font-style: normal; }
+@media (max-width: 700px) {
+  .trade-alert { flex-wrap: wrap; gap: 4px 10px; }
+  .trade-alert span { flex-basis: 100%; }
+}

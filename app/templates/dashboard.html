@@ -77,7 +77,10 @@
 
     <details class="paper-fold">
       <summary>Paper-trading simulator <span class="muted">(not your real account)</span></summary>
-      <section class="cards" id="summary-cards"></section>
+      <!-- Live trade alerts: nothing the daemon does is silent. -->
+    <div id="trade-alerts"></div>
+
+    <section class="cards" id="summary-cards"></section>
     </details>
 
     <!-- Open positions ride at the top and stay put: closing a live position

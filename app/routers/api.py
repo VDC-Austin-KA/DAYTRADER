@@ -339,6 +339,15 @@ def flip(req: CloseRequest, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/notifications")
+def notifications(after: int = 0):
+    """Trade events since ``after``. Polled by the dashboard so no order
+    the daemon places can happen without the operator seeing it."""
+    from ..trading import notify
+
+    return {"latest": notify.latest_id(), "events": notify.since(after)}
+
+
 @router.get("/gamma/{symbol}")
 def gamma_profile(symbol: str, expiry: str | None = None):
     """Dealer gamma exposure: which regime the tape is in right now.

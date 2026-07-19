@@ -750,3 +750,48 @@ $("#broker-flatten").addEventListener("click", async () => {
 
 refreshBroker();
 setInterval(refreshBroker, 15000);
+
+// ---------------------------------------------------------------------------
+// Trade notifications, in-page only. An autonomous daemon placing real
+// orders must never do it invisibly, and the alert must look the same
+// through the Railway /go link on a phone as it does on the desktop.
+// ---------------------------------------------------------------------------
+let _lastNotifId = 0;
+
+// In-page only: no OS notification permission prompt, nothing that depends
+// on the browser being trusted or the tab being desktop. That means alerts
+// render identically on a phone hitting the Railway /go link as they do
+// locally -- the banner IS the notification.
+function showTradeAlert(e) {
+  const bar = $("#trade-alerts");
+  if (!bar) return;
+  const cls = e.kind === "entry" ? "alert-entry"
+            : e.kind === "exit" ? "alert-exit" : "alert-warn";
+  const when = new Date(e.ts).toLocaleTimeString();
+  const el = document.createElement("div");
+  el.className = `trade-alert ${cls}`;
+  el.innerHTML = `<b>${e.title}</b><span>${e.detail || ""}</span>
+    <em>${when}</em>
+    <button onclick="this.parentElement.remove()">✕</button>`;
+  bar.prepend(el);
+  while (bar.children.length > 8) bar.lastChild.remove();
+  toast(e.title);
+}
+
+async function pollNotifications() {
+  try {
+    const r = await api(`/api/notifications?after=${_lastNotifId}`);
+    for (const e of r.events || []) showTradeAlert(e);
+    _lastNotifId = r.latest ?? _lastNotifId;
+  } catch (e) { /* transient; next poll retries */ }
+}
+
+// Show the recent backlog on load so a phone opened mid-session still sees
+// what the daemon has been doing, then follow live.
+api("/api/notifications?after=0")
+  .then(r => {
+    (r.events || []).slice(-5).forEach(showTradeAlert);
+    _lastNotifId = r.latest || 0;
+  })
+  .catch(() => {});
+setInterval(pollNotifications, 3000);

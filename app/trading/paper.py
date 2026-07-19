@@ -73,6 +73,26 @@ def open_position(
             return None, f"Entry blocked: {why}."
 
     cost = price * quantity * 100
+
+    # Live-money sizing cap. The browser caps the input too, but that is
+    # advisory -- anyone can retype it, and a stale page carries a stale
+    # limit. This is the check that actually binds. Two thirds, not all, so
+    # a third of buying power stays free for manual trades in the moomoo app.
+    if settings.dashboard_trade_mode == "moomoo":
+        from . import moomoo_account
+
+        acct = moomoo_account.account_summary()
+        bp = float(acct.get("us_buying_power") or 0) if acct.get("ok") else 0.0
+        if bp > 0:
+            usable = bp * settings.buying_power_fraction
+            if cost > usable:
+                affordable = int(usable / (price * 100)) if price > 0 else 0
+                return None, (
+                    f"Order ${cost:,.2f} exceeds the ${usable:,.2f} sizing cap "
+                    f"({settings.buying_power_fraction:.0%} of ${bp:,.2f} buying "
+                    f"power). Max here is {affordable} contract(s)."
+                )
+
     if cost > portfolio.cash:
         return None, f"Insufficient cash: need ${cost:,.2f}, have ${portfolio.cash:,.2f}."
 

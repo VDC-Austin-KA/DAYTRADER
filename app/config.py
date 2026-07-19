@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     # dashboard Buy/Close buttons through the moomoo OpenD gateway.
     dashboard_trade_mode: str = os.getenv("DASHBOARD_TRADE_MODE", "paper").lower()
 
+    # Fraction of live US buying power this dashboard may commit to one
+    # order. The remainder stays free so manual trades placed in the moomoo
+    # app are never blocked by what the dashboard has already tied up.
+    buying_power_fraction: float = float(
+        os.getenv("BUYING_POWER_FRACTION", "0.6667")
+    )
+
     # --- Session risk ---
     # Hard no-overnight rule: block entries after the cutoff and force-flatten
     # before the bell. Overnight gaps cannot be stopped out of -- there are no

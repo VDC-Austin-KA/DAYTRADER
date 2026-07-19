@@ -2,6 +2,10 @@
 const $ = (sel) => document.querySelector(sel);
 let priceChart = null;
 let signalsCache = [];
+// Live US buying power, refreshed with the account strip. Sizing caps
+// are derived from this so the UI cannot offer a size you can't fund.
+let _buyingPower = 0;
+const BP_USABLE = 2 / 3;   // leave headroom for manual trades
 
 function toast(msg, isError = false) {
   const el = $("#toast");
@@ -148,18 +152,38 @@ function orderQty(el) {
   // el = the Buy button; its row-local input is the authority.
   if (el) {
     const box = el.parentElement && el.parentElement.querySelector(".row-qty");
-    if (box) return clampQty(box.value);
+    if (box) {
+      const cap = parseInt(box.dataset.cap, 10);
+      const n = clampQty(box.value);
+      return Number.isFinite(cap) ? Math.min(n, cap) : n;
+    }
   }
   return clampQty(($("#order-qty") || {}).value);
+}
+
+// Most contracts affordable at `price`, using two thirds of buying power.
+// The remaining third is deliberately left free so manual trades in the
+// moomoo app are never blocked by what this dashboard has committed.
+function maxAffordable(price) {
+  if (!_buyingPower || !price || price <= 0) return 100;
+  return Math.max(0, Math.floor((_buyingPower * BP_USABLE) / (price * 100)));
 }
 
 // Markup for a qty box + Buy button pair, used by every table.
 function buyCell(payload, fnName = "buyOpportunity", label = "Buy") {
   const json = JSON.stringify(payload).replace(/'/g, "&apos;");
+  const price = payload.mid ?? payload.option_price ?? 0;
+  const cap = Math.min(100, maxAffordable(price));
+  if (cap < 1) {
+    return `<span class="muted" title="Buying power $${_buyingPower.toFixed(2)}">`
+      + `too rich</span>`;
+  }
+  const start = Math.min(clampQty(($("#order-qty") || {}).value), cap);
   return `<div class="buy-cell">
-    <input class="row-qty" type="number" min="1" max="100" step="1"
-           value="${clampQty(($("#order-qty") || {}).value)}"
-           title="Contracts" onclick="event.stopPropagation()">
+    <input class="row-qty" type="number" min="1" max="${cap}" step="1"
+           value="${start}" data-cap="${cap}"
+           title="Max ${cap} at $${price.toFixed(2)} (2/3 of buying power)"
+           onclick="event.stopPropagation()">
     <button class="btn sm" onclick='${fnName}(${json}, this)'>${label}</button>
   </div>`;
 }
@@ -596,6 +620,7 @@ function fmtCcy(n, ccy) {
 async function loadAccount() {
   try {
     const a = await api("/api/account");
+    _buyingPower = a.ok ? (a.us_buying_power || 0) : 0;
     const strip = $("#account-strip");
     if (!a.ok) {
       strip.innerHTML = `<div class="acct-item warn">Broker account unavailable — ${a.message || "gateway down"}</div>`;

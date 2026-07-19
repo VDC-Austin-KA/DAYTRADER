@@ -64,12 +64,17 @@ def _tape_stats(prints: deque, now: float) -> dict:
     }
 
 
-def main() -> int:   # pragma: no cover - needs a live gateway
+def run(stop_event=None) -> int:   # pragma: no cover - needs a live gateway
+    """Capture loop. Pass a ``threading.Event`` to stop it cleanly.
+
+    Runs either standalone (python -m app.capture) or as a daemon thread
+    started by the web app, so launching the dashboard is enough -- there
+    is nothing extra to remember each morning.
+    """
     from moomoo import OpenQuoteContext, RET_OK, SubType, SysConfig
 
     from .data import moomoo_data as mm
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     OUT_DIR.mkdir(exist_ok=True)
     SysConfig.set_all_thread_daemon(True)
     q = OpenQuoteContext(host=settings.moomoo_opend_host or "127.0.0.1",
@@ -85,7 +90,7 @@ def main() -> int:   # pragma: no cover - needs a live gateway
     log.info("capture starting: %s -> %s/", underlying, OUT_DIR)
     try:
         q.subscribe([underlying], [SubType.QUOTE])
-        while True:
+        while not (stop_event and stop_event.is_set()):
             now = time.time()
 
             # Refresh the ATM contract set every few minutes as spot drifts.
@@ -164,9 +169,15 @@ def main() -> int:   # pragma: no cover - needs a live gateway
                          len(rows), path.name, len(df))
                 rows = []
 
-            time.sleep(SNAPSHOT_SECS)
+            if stop_event:
+                stop_event.wait(SNAPSHOT_SECS)
+            else:
+                time.sleep(SNAPSHOT_SECS)
     except KeyboardInterrupt:
         log.info("capture stopped")
+    except Exception:
+        # A capture crash must never take the dashboard with it.
+        log.exception("capture loop failed; data up to now is saved")
     finally:
         if rows:
             day = datetime.utcnow().strftime("%Y-%m-%d")
@@ -178,6 +189,11 @@ def main() -> int:   # pragma: no cover - needs a live gateway
             log.info("final flush: %d rows", len(rows))
         q.close()
     return 0
+
+
+def main() -> int:   # pragma: no cover
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    return run()
 
 
 if __name__ == "__main__":

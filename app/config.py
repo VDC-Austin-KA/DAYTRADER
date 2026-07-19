@@ -60,6 +60,13 @@ class Settings(BaseSettings):
         os.getenv("SCALPER_MAX_DAILY_LOSS", "150")
     )
 
+    # Record order-book depth and tape aggression while the app runs.
+    # On by default: it is the only source of the entry features that
+    # price/volume data provably lacks, and it costs one extra thread.
+    capture_enabled: bool = (
+        os.getenv("CAPTURE_ENABLED", "true").lower() == "true"
+    )
+
     # --- Session risk ---
     # Hard no-overnight rule: block entries after the cutoff and force-flatten
     # before the bell. Overnight gaps cannot be stopped out of -- there are no

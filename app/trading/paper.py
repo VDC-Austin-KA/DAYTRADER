@@ -140,6 +140,13 @@ def open_position(
     )
     db.commit()
     db.refresh(pos)
+    from . import notify
+
+    notify.record(
+        "entry", f"BOUGHT {quantity} x {contract_symbol}",
+        f"{symbol.upper()} {option_type} ${strike} @ ${price:.2f} "
+        f"(cost ${cost:,.2f}){broker_note}",
+        level="trade", code=contract_symbol, qty=quantity, price=price)
     return pos, "Position opened."
 
 
@@ -208,6 +215,13 @@ def close_position(db: Session, portfolio: Portfolio, position_id: int,
         )
     )
     db.commit()
+    from . import notify
+
+    notify.record(
+        "exit", f"SOLD {qty} x {pos.contract_symbol}",
+        f"@ ${price:.2f}, P&L ${realized:+,.2f}. {note}".strip(),
+        level="trade", code=pos.contract_symbol, qty=qty,
+        price=price, pnl=realized)
     return True, f"Closed for ${proceeds:,.2f} (P&L ${realized:,.2f})."
 
 

@@ -17,3 +17,5 @@ holdout_results.json
 sweep_out_*.json
 slice*.json
 drive*.py
+capture/
+fills_history.csv

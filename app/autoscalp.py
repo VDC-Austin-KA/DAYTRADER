@@ -59,10 +59,22 @@ BURST_WINDOW = settings.scalper_burst_window
 COOLDOWN = settings.scalper_cooldown
 QTY = settings.scalper_qty
 TRADE_MODE = settings.scalper_trade_mode
-# Daily circuit breaker: once today's realized P&L is at or below -this,
-# no more entries until tomorrow. Exits keep running -- the breaker stops
-# digging, it never blocks getting out.
-MAX_DAILY_LOSS = settings.scalper_max_daily_loss
+# Daily circuit breaker: expressed as a FRACTION of live buying power so
+# it scales with the account instead of drifting out of proportion. Once
+# today's realized P&L is at or below -(fraction * buying power), no more
+# entries until tomorrow. Exits keep running -- the breaker stops digging,
+# it never blocks getting out.
+MAX_DAILY_LOSS_FRAC = settings.scalper_max_daily_loss_frac
+MAX_DAILY_LOSS_FLOOR = settings.scalper_max_daily_loss   # absolute backstop
+
+
+def daily_loss_limit(buying_power: float) -> float:
+    """Today's loss budget in dollars. Never exceeds the absolute floor."""
+    if buying_power <= 0:
+        return MAX_DAILY_LOSS_FLOOR
+    return min(buying_power * MAX_DAILY_LOSS_FRAC, MAX_DAILY_LOSS_FLOOR)
+
+
 RESUBSCRIBE_SECS = 60.0        # refresh ATM strikes this often
 
 
@@ -91,6 +103,26 @@ def _record_spot(price: float) -> None:
     cutoff = now - BURST_WINDOW
     while _spot_path and _spot_path[0][0] < cutoff:
         _spot_path.popleft()
+
+
+def _recent_daily_pnl(db, pf, days: int = 10) -> list[float]:
+    """Realized P&L per day, most recent first, for the sizing multiplier."""
+    from sqlalchemy import func
+
+    from .models import Trade
+
+    rows = (
+        db.query(
+            func.date(Trade.timestamp).label("d"),
+            func.coalesce(func.sum(Trade.realized_pnl), 0.0).label("pnl"),
+        )
+        .filter(Trade.portfolio_id == pf.id, Trade.side == "sell")
+        .group_by("d")
+        .order_by(func.date(Trade.timestamp).desc())
+        .limit(days)
+        .all()
+    )
+    return [float(r.pnl or 0.0) for r in rows]
 
 
 def detect_burst() -> str | None:
@@ -171,7 +203,7 @@ def main() -> int:   # pragma: no cover - needs a live gateway
 
     from .data import moomoo_data as mm
     from .database import SessionLocal, init_db
-    from .trading import brackets, paper, scalp
+    from .trading import brackets, notify, paper, scalp
     from .trading import session as sess
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -236,6 +268,16 @@ def main() -> int:   # pragma: no cover - needs a live gateway
                             quantity=act.sell_qty, note=f"autoscalp {act.kind}")
                         log.warning("%s #%s: %s -> %s",
                                     act.kind, pos.id, act.reason, msg)
+                        if ok:
+                            pnl = (act.est_price - st.entry_price) * act.sell_qty * 100
+                            notify.record(
+                                "exit",
+                                f"SOLD {act.sell_qty} x {pos.contract_symbol} "
+                                f"({act.kind})",
+                                f"@ ${act.est_price:.2f}, P&L ${pnl:+,.2f}. "
+                                f"{act.reason}",
+                                level="trade", code=pos.contract_symbol,
+                                qty=act.sell_qty, price=act.est_price, pnl=pnl)
                         if not ok:
                             st.closed = False
                             st.remaining += act.sell_qty
@@ -257,11 +299,23 @@ def main() -> int:   # pragma: no cover - needs a live gateway
                         Trade.side == "sell",
                         func.date(Trade.timestamp) == today.isoformat(),
                     ).scalar() or 0.0)
-                    if realized <= -MAX_DAILY_LOSS:
+                    from .trading import moomoo_account as _ma
+
+                    _acct = _ma.account_summary()
+                    _bp = (float(_acct.get("us_buying_power") or 0)
+                           if _acct.get("ok") else 0.0)
+                    limit = daily_loss_limit(_bp)
+                    if realized <= -limit:
                         can = False
+                        notify.record(
+                            "blocked", "Daily loss limit hit",
+                            f"today {realized:+.2f} <= -{limit:.2f} "
+                            f"({MAX_DAILY_LOSS_FRAC:.0%} of ${_bp:,.0f} buying "
+                            "power). No more entries today; exits still run.",
+                            level="warn")
                         log.warning(
                             "circuit breaker: today %.2f <= -%.2f; no more "
-                            "entries today", realized, MAX_DAILY_LOSS)
+                            "entries today", realized, limit)
                 if (can and not open_pos and now - last_entry > COOLDOWN):
                     direction = detect_burst()
                     if direction:
@@ -284,13 +338,45 @@ def main() -> int:   # pragma: no cover - needs a live gateway
                                 pick = (code, meta, ask)
                         if pick:
                             code, meta, ask = pick
-                            pos, msg = paper.open_position(
-                                db, pf, UNDERLYING, meta["right"], code,
-                                meta["strike"], expiry, QTY, ask,
-                                note=f"autoscalp burst-{direction}")
-                            log.warning("ENTRY %s %s x%d @ %.2f -> %s",
-                                        direction, code, QTY, ask, msg)
-                            last_entry = now
+                            # Size from equity and recent DAILY results --
+                            # never from conviction, and never larger after
+                            # a win. This is the rule the 702-trip history
+                            # says the account actually needed.
+                            from .trading import moomoo_account, sizing
+
+                            acct = moomoo_account.account_summary()
+                            bp = (float(acct.get("us_buying_power") or 0)
+                                  if acct.get("ok") else 0.0)
+                            equity = float(acct.get("us_assets") or 0) or bp
+                            decision = sizing.contracts_for(
+                                equity=equity, entry_price=ask,
+                                stop_pct=brackets.STOP_LOSS_PCT,
+                                recent_daily_pnl=_recent_daily_pnl(db, pf),
+                                buying_power=bp,
+                                bp_fraction=settings.buying_power_fraction,
+                                max_contracts=QTY,
+                            )
+                            if decision.contracts <= 0:
+                                log.info("entry skipped: %s", decision.reason)
+                            else:
+                                pos, msg = paper.open_position(
+                                    db, pf, UNDERLYING, meta["right"], code,
+                                    meta["strike"], expiry,
+                                    decision.contracts, ask,
+                                    note=f"autoscalp burst-{direction}")
+                                log.warning("ENTRY %s %s %s @ %.2f -> %s",
+                                            direction, code,
+                                            decision.describe(), ask, msg)
+                                if pos is not None:
+                                    notify.record(
+                                        "entry",
+                                        f"BOUGHT {decision.contracts} x {code}",
+                                        f"{direction}-burst @ ${ask:.2f} "
+                                        f"(cost ${ask*decision.contracts*100:,.2f}). "
+                                        f"{decision.reason}",
+                                        level="trade", code=code,
+                                        qty=decision.contracts, price=ask)
+                                last_entry = now
             finally:
                 db.close()
 

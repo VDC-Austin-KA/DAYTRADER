@@ -339,6 +339,51 @@ def flip(req: CloseRequest, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/news")
+def news(limit: int = 25, refresh: bool = False):
+    from ..data import newsfeed
+
+    return {"items": newsfeed.get_news(limit=limit, refresh=refresh)}
+
+
+@router.get("/calendar")
+def calendar(days: int = 14):
+    from ..data import newsfeed
+
+    return newsfeed.get_calendar(days=days)
+
+
+@router.get("/universe")
+def universe(refresh: bool = False, limit: int = 18):
+    """Today's dynamic movers universe with the scores that put each name
+    in it -- unusual volume, movement, liquidity, short interest."""
+    from ..trading import universe as uni
+
+    return {"universe": uni.get_universe(refresh=refresh, limit=limit),
+            "detail": uni.universe_detail(refresh=refresh, limit=limit)}
+
+
+@router.get("/intraday/{symbol}")
+def intraday(symbol: str, interval: str = "1m", extended: bool = True):
+    """Intraday OHLCV with premarket/after-hours plus RSI and AO."""
+    from ..data import intraday as iday
+
+    data = iday.get_intraday(symbol.upper(), interval=interval,
+                             extended=extended)
+    if not data["bars"] and data.get("message"):
+        raise HTTPException(404, data["message"])
+    return data
+
+
+@router.get("/notifications")
+def notifications(after: int = 0):
+    """Trade events since ``after``. Polled by the dashboard so no order
+    the daemon places can happen without the operator seeing it."""
+    from ..trading import notify
+
+    return {"latest": notify.latest_id(), "events": notify.since(after)}
+
+
 @router.get("/gamma/{symbol}")
 def gamma_profile(symbol: str, expiry: str | None = None):
     """Dealer gamma exposure: which regime the tape is in right now.

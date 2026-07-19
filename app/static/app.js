@@ -529,25 +529,62 @@ function moversRowHtml(o) {
     <td>${o.direction}</td>
     <td>${o.whipsaw ? 'yes' : ''}</td>
     <td>${o.blended_score.toFixed(3)}</td>
+    <td class="px-contract" title="mid $${(o.mid ?? 0).toFixed(2)} x 100">$${((o.mid ?? 0) * 100).toFixed(0)}</td>
     <td>${buyCell(o)}</td>
   </tr>`;
 }
 
+// Column filters. Text substring boxes were useless on numeric columns
+// (typing "5" matched 5, 15, 0.05...). Categorical columns now get a
+// dropdown of the values actually present; numeric columns get a min/max
+// pair, so "POP >= 40 and cost <= 100" is expressible.
+const MOVERS_NUMERIC = new Set([
+  "strike", "dte", "cost", "prob_profit", "success",
+  "potential_return", "surge", "blended_score",
+]);
+// Columns whose stored value is a fraction but displayed as a percent --
+// filter input is in the DISPLAYED units, which is what the user sees.
+const MOVERS_PCT = new Set(["prob_profit", "success", "potential_return"]);
+
+function moversFilterValue(o, key) {
+  if (key === "whipsaw") return o.whipsaw ? "yes" : "no";
+  const v = o[key];
+  return MOVERS_PCT.has(key) ? v * 100 : v;
+}
+
+function moversPasses(o) {
+  for (const el of document.querySelectorAll("#movers-table .col-filter")) {
+    const key = el.dataset.k;
+    const raw = el.value.trim();
+    if (!raw) continue;
+    const val = moversFilterValue(o, key);
+    if (el.dataset.range) {
+      const n = parseFloat(raw);
+      if (!Number.isFinite(n)) continue;
+      if (el.dataset.range === "min" && !(Number(val) >= n)) return false;
+      if (el.dataset.range === "max" && !(Number(val) <= n)) return false;
+    } else if (String(val).toLowerCase() !== raw.toLowerCase()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function drawMoversTable() {
-  const filters = [...document.querySelectorAll("#movers-table .col-filter")]
-    .map(inp => ({ key: inp.dataset.k, q: inp.value.trim().toLowerCase() }))
-    .filter(f => f.q);
-  let rows = moversRows.filter(o =>
-    filters.every(f => String(f.key === 'whipsaw' ? (o.whipsaw ? 'yes' : 'no') : o[f.key])
-      .toLowerCase().includes(f.q)));
+  let rows = moversRows.filter(moversPasses);
   const { key, dir, numeric } = moversSort;
-  rows = rows.slice().sort((a, b) => {
-    const av = a[key], bv = b[key];
-    return dir * (numeric ? (av - bv) : String(av).localeCompare(String(bv)));
-  });
+  if (key) {
+    rows = rows.slice().sort((a, b) => {
+      const av = a[key], bv = b[key];
+      const c = numeric ? (av - bv) : String(av).localeCompare(String(bv));
+      return dir === "asc" ? c : -c;
+    });
+  }
   $("#movers-table tbody").innerHTML = rows.length
     ? rows.map(moversRowHtml).join("")
-    : `<tr><td colspan="14" class="muted">Nothing matches the filters.</td></tr>`;
+    : `<tr><td colspan="15" class="muted">Nothing matches the filters.</td></tr>`;
+  const meta = $("#movers-filter-count");
+  if (meta) meta.textContent = `${rows.length} / ${moversRows.length} shown`;
 }
 
 function initMoversTable() {
@@ -556,19 +593,62 @@ function initMoversTable() {
   filterRow.innerHTML = "";
   head.forEach(th => {
     const td = document.createElement("th");
-    if (th.dataset.k) {
-      td.innerHTML = `<input class="col-filter" data-k="${th.dataset.k}" placeholder="filter" />`;
+    const key = th.dataset.k;
+    if (key) {
+      if (MOVERS_NUMERIC.has(key)) {
+        td.innerHTML =
+          `<div class="rangebox">
+             <input class="col-filter" data-k="${key}" data-range="min"
+                    type="number" step="any" placeholder="min">
+             <input class="col-filter" data-k="${key}" data-range="max"
+                    type="number" step="any" placeholder="max">
+           </div>`;
+      } else {
+        td.innerHTML = `<select class="col-filter" data-k="${key}">
+                          <option value="">all</option>
+                        </select>`;
+      }
       th.classList.add("sortable");
       th.addEventListener("click", () => {
-        const numeric = "num" in th.dataset;
-        if (moversSort.key === th.dataset.k) moversSort.dir *= -1;
-        else moversSort = { key: th.dataset.k, dir: numeric ? -1 : 1, numeric };
+        const numeric = th.dataset.num !== undefined;
+        moversSort = moversSort.key === key
+          ? { key, dir: moversSort.dir === "asc" ? "desc" : "asc", numeric }
+          : { key, dir: "desc", numeric };
         drawMoversTable();
       });
     }
     filterRow.appendChild(td);
   });
   filterRow.addEventListener("input", drawMoversTable);
+  filterRow.addEventListener("change", drawMoversTable);
+  const reset = $("#movers-filter-reset");
+  if (reset) reset.addEventListener("click", () => {
+    document.querySelectorAll("#movers-table .col-filter")
+      .forEach(el => { el.value = ""; });
+    drawMoversTable();
+  });
+}
+
+// Populate dropdowns from the values actually present in the current scan.
+function refreshMoversFilterOptions() {
+  // loadMovers can resolve before initMoversTable has built the row, in
+  // which case there are no selects to fill. Build it first.
+  if (!document.querySelector("#movers-table .col-filter")) initMoversTable();
+  document.querySelectorAll("#movers-table select.col-filter").forEach(sel => {
+    const key = sel.dataset.k;
+    const raw = [...new Set(moversRows.map(o => moversFilterValue(o, key)))];
+    const seen = raw
+      .sort((a, b) => {
+        const na = parseFloat(a), nb = parseFloat(b);
+        if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+        return String(a).localeCompare(String(b));
+      })
+      .map(String);
+    const keep = sel.value;
+    sel.innerHTML = `<option value="">all</option>` +
+      seen.map(v => `<option value="${v}">${v}</option>`).join("");
+    if (seen.includes(keep)) sel.value = keep;
+  });
 }
 
 async function loadMovers(refresh = false) {
@@ -577,6 +657,7 @@ async function loadMovers(refresh = false) {
   try {
     const r = await api(`/api/movers${refresh ? "?refresh=true" : ""}`);
     moversRows = r.options;
+    refreshMoversFilterOptions();
     renderHeadlines(r.headlines);
     renderPlays(r.plays);
     drawMoversTable();
@@ -586,7 +667,7 @@ async function loadMovers(refresh = false) {
       ` · updated ${new Date(r.generated_at * 1000).toLocaleTimeString()}`;
   } catch (e) {
     meta.textContent = "";
-    $("#movers-table tbody").innerHTML = `<tr><td colspan="14" class="neg">${e.message}</td></tr>`;
+    $("#movers-table tbody").innerHTML = `<tr><td colspan="15" class="neg">${e.message}</td></tr>`;
   }
 }
 
@@ -750,3 +831,202 @@ $("#broker-flatten").addEventListener("click", async () => {
 
 refreshBroker();
 setInterval(refreshBroker, 15000);
+
+// ---------------------------------------------------------------------------
+// Trade notifications, in-page only. An autonomous daemon placing real
+// orders must never do it invisibly, and the alert must look the same
+// through the Railway /go link on a phone as it does on the desktop.
+// ---------------------------------------------------------------------------
+let _lastNotifId = 0;
+
+// In-page only: no OS notification permission prompt, nothing that depends
+// on the browser being trusted or the tab being desktop. That means alerts
+// render identically on a phone hitting the Railway /go link as they do
+// locally -- the banner IS the notification.
+function showTradeAlert(e) {
+  const bar = $("#trade-alerts");
+  if (!bar) return;
+  const cls = e.kind === "entry" ? "alert-entry"
+            : e.kind === "exit" ? "alert-exit" : "alert-warn";
+  const when = new Date(e.ts).toLocaleTimeString();
+  const el = document.createElement("div");
+  el.className = `trade-alert ${cls}`;
+  el.innerHTML = `<b>${e.title}</b><span>${e.detail || ""}</span>
+    <em>${when}</em>
+    <button onclick="this.parentElement.remove()">✕</button>`;
+  bar.prepend(el);
+  while (bar.children.length > 8) bar.lastChild.remove();
+  toast(e.title);
+}
+
+async function pollNotifications() {
+  try {
+    const r = await api(`/api/notifications?after=${_lastNotifId}`);
+    for (const e of r.events || []) showTradeAlert(e);
+    _lastNotifId = r.latest ?? _lastNotifId;
+  } catch (e) { /* transient; next poll retries */ }
+}
+
+// Show the recent backlog on load so a phone opened mid-session still sees
+// what the daemon has been doing, then follow live.
+api("/api/notifications?after=0")
+  .then(r => {
+    (r.events || []).slice(-5).forEach(showTradeAlert);
+    _lastNotifId = r.latest || 0;
+  })
+  .catch(() => {});
+setInterval(pollNotifications, 3000);
+
+// ---------------------------------------------------------------------------
+// TradingView Advanced Chart. Their widget already provides extended-hours
+// sessions and RSI / Awesome Oscillator as native studies, so embedding it
+// beats reimplementing those in Chart.js -- and it brings drawing tools and
+// the full indicator library for free.
+// ---------------------------------------------------------------------------
+function loadTradingView() {
+  const container = $("#tv-chart-container");
+  if (!container) return;
+  const symbol = ($("#tv-symbol").value || "SPY").trim().toUpperCase();
+  const interval = $("#tv-interval").value;
+  const extended = $("#tv-extended").checked;
+
+  container.innerHTML = "";
+  const script = document.createElement("script");
+  script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+  script.async = true;
+  script.innerHTML = JSON.stringify({
+    autosize: true,
+    symbol,
+    interval,
+    timezone: "America/Chicago",
+    theme: "dark",
+    style: "1",                    // candles
+    locale: "en",
+    // "extended" includes premarket and after-hours; "regular" is RTH only.
+    session: extended ? "extended" : "regular",
+    withdateranges: true,
+    hide_side_toolbar: false,
+    allow_symbol_change: true,
+    studies: [
+      "Volume@tv-basicstudies",
+      "RSI@tv-basicstudies",
+      "AwesomeOscillator@tv-basicstudies",
+    ],
+    support_host: "https://www.tradingview.com",
+  });
+  container.appendChild(script);
+}
+
+["#tv-symbol", "#tv-interval", "#tv-extended"].forEach(sel => {
+  const el = $(sel);
+  if (el) el.addEventListener("change", loadTradingView);
+});
+loadTradingView();
+
+// ---------------------------------------------------------------------------
+// Mobile: tabs, column toggles, density. A portrait iPhone cannot show a
+// 15-column table and five panels at once, so the page becomes one view at
+// a time with the columns the user actually wants.
+// ---------------------------------------------------------------------------
+const VIEW_KEY = "dt.view", COLS_KEY = "dt.cols", DENSE_KEY = "dt.dense";
+
+function showView(name) {
+  document.querySelectorAll("[data-view]").forEach(el => {
+    el.hidden = el.dataset.view !== name;
+  });
+  document.querySelectorAll("#tabbar .tab[data-tab]").forEach(b => {
+    b.classList.toggle("active", b.dataset.tab === name);
+  });
+  localStorage.setItem(VIEW_KEY, name);
+  // Panels without a data-view (grid extras) belong to Models.
+  document.querySelectorAll("main > .grid").forEach(g => {
+    g.hidden = name !== "models";
+  });
+  if (name === "news") loadNews();
+}
+
+document.querySelectorAll("#tabbar .tab[data-tab]").forEach(b =>
+  b.addEventListener("click", () => showView(b.dataset.tab)));
+
+// --- Column visibility (movers table) -------------------------------------
+function hiddenCols() {
+  try { return new Set(JSON.parse(localStorage.getItem(COLS_KEY) || "[]")); }
+  catch { return new Set(); }
+}
+
+function applyCols() {
+  const hide = hiddenCols();
+  const ths = [...document.querySelectorAll("#movers-table thead tr:first-child th")];
+  ths.forEach((th, i) => {
+    const off = hide.has(th.dataset.k || String(i));
+    th.style.display = off ? "none" : "";
+    document.querySelectorAll("#movers-table tr").forEach(tr => {
+      const cell = tr.children[i];
+      if (cell) cell.style.display = off ? "none" : "";
+    });
+  });
+}
+
+function buildColsPanel() {
+  const panel = $("#cols-panel");
+  const ths = [...document.querySelectorAll("#movers-table thead tr:first-child th")];
+  const hide = hiddenCols();
+  panel.innerHTML = ths.map((th, i) => {
+    const key = th.dataset.k || String(i);
+    const label = th.textContent.trim() || "Buy";
+    return `<label><input type="checkbox" data-col="${key}"
+      ${hide.has(key) ? "" : "checked"}> ${label}</label>`;
+  }).join("");
+  panel.addEventListener("change", e => {
+    if (!e.target.dataset.col) return;
+    const h = hiddenCols();
+    e.target.checked ? h.delete(e.target.dataset.col) : h.add(e.target.dataset.col);
+    localStorage.setItem(COLS_KEY, JSON.stringify([...h]));
+    applyCols();
+  });
+}
+
+$("#cols-btn").addEventListener("click", () => {
+  const p = $("#cols-panel");
+  if (!p.innerHTML) buildColsPanel();
+  p.hidden = !p.hidden;
+});
+
+// --- Density ---------------------------------------------------------------
+function applyDensity() {
+  document.body.classList.toggle("dense", localStorage.getItem(DENSE_KEY) === "1");
+}
+$("#density-btn").addEventListener("click", () => {
+  localStorage.setItem(DENSE_KEY,
+    localStorage.getItem(DENSE_KEY) === "1" ? "0" : "1");
+  applyDensity();
+});
+
+// --- News / calendar -------------------------------------------------------
+async function loadNews(refresh = false) {
+  try {
+    const r = await api(`/api/news?limit=30${refresh ? "&refresh=true" : ""}`);
+    $("#news-list").innerHTML = (r.items || []).map(n => {
+      const cls = n.impact >= 3 ? "hi" : n.impact >= 2 ? "mid" : "";
+      return `<a class="news-item ${cls}" href="${n.link}" target="_blank" rel="noopener">
+        <span class="news-src">${n.source}</span>
+        <span class="news-title">${n.title}</span>
+        ${n.impact ? `<span class="news-impact">${n.impact.toFixed(0)}</span>` : ""}
+      </a>`;
+    }).join("") || "No headlines.";
+  } catch (e) { $("#news-list").textContent = e.message; }
+  try {
+    const c = await api("/api/calendar?days=21");
+    $("#calendar-table tbody").innerHTML = (c.events || []).map(e => `
+      <tr><td>${e.date}</td><td>${e.time_et}</td><td>${e.event}</td>
+        <td>${e.expected ?? "—"}</td><td>${e.actual ?? "—"}</td>
+        <td>${e.previous ?? "—"}</td></tr>`).join("");
+    $("#calendar-note").textContent = c.note || "";
+  } catch (e) { /* leave empty */ }
+}
+$("#news-refresh").addEventListener("click", () => loadNews(true));
+
+applyDensity();
+showView(localStorage.getItem(VIEW_KEY) || "trade");
+const _origDraw = drawMoversTable;
+drawMoversTable = function () { _origDraw.apply(this, arguments); applyCols(); };

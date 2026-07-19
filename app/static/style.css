@@ -252,3 +252,97 @@ th.sortable:hover { color: #fff; }
   text-transform: uppercase; letter-spacing: .04em;
 }
 .paper-fold .cards { margin-top: 12px; margin-bottom: 4px; }
+
+/* --- Live trade alerts ------------------------------------------------- */
+#trade-alerts { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.trade-alert {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; border-radius: 10px; font-size: 13px;
+  border: 1px solid; animation: alert-in .25s ease-out;
+}
+.trade-alert b { flex: 0 0 auto; }
+.trade-alert span { flex: 1; color: var(--muted); }
+.trade-alert button {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 14px;
+}
+.alert-entry { background: rgba(79,140,255,.12); border-color: var(--blue); }
+.alert-exit  { background: rgba(46,204,113,.12); border-color: var(--green); }
+.alert-warn  { background: rgba(255,206,84,.12); border-color: var(--yellow); }
+@keyframes alert-in { from { opacity: 0; transform: translateY(-6px); } }
+.trade-alert em { color: var(--muted); font-size: 11px; font-style: normal; }
+@media (max-width: 700px) {
+  .trade-alert { flex-wrap: wrap; gap: 4px 10px; }
+  .trade-alert span { flex-basis: 100%; }
+}
+
+/* --- TradingView panel -------------------------------------------------- */
+.tv-panel { margin-bottom: 16px; }
+.tv-controls { display: flex; gap: 8px; align-items: center; }
+.tv-controls input[type="text"] {
+  width: 80px; padding: 6px 8px; border-radius: 8px; text-transform: uppercase;
+  border: 1px solid var(--border); background: var(--panel-2);
+  color: var(--text); font-weight: 700; font-size: 13px;
+}
+.tv-ext { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+#tv-chart-container { height: 620px; width: 100%; }
+@media (max-width: 700px) { #tv-chart-container { height: 460px; } }
+.px-contract { font-weight: 700; white-space: nowrap; }
+.rangebox { display: flex; gap: 3px; }
+.rangebox .col-filter { width: 50%; min-width: 0; }
+select.col-filter {
+  width: 100%; font-size: 11px; padding: 3px 4px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+}
+
+/* --- Tabs / mobile density --------------------------------------------- */
+.tabbar {
+  display: flex; gap: 4px; align-items: center; padding: 6px 12px;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 30; overflow-x: auto;
+}
+.tab {
+  flex: 0 0 auto; background: transparent; border: 1px solid transparent;
+  color: var(--muted); padding: 7px 14px; border-radius: 8px;
+  font-weight: 700; font-size: 13px; cursor: pointer;
+}
+.tab.active { background: var(--blue); color: #fff; }
+.tab.ghost { border-color: var(--border); font-size: 12px; padding: 6px 10px; }
+.tab-spacer { flex: 1; }
+.cols-panel {
+  display: flex; flex-wrap: wrap; gap: 8px 14px;
+  padding: 10px 14px; background: var(--panel-2);
+  border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.cols-panel label { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+
+/* Compact mode: fit far more rows on a portrait phone. */
+body.dense { font-size: 12px; }
+body.dense table { font-size: 11px; }
+body.dense th, body.dense td { padding: 4px 4px; }
+body.dense .card .value { font-size: 18px; }
+body.dense .panel { padding: 10px; }
+body.dense .acct-item { padding: 5px 9px; }
+body.dense .acct-item b { font-size: 13px; }
+body.dense #tv-chart-container { height: 380px; }
+
+/* --- News --------------------------------------------------------------- */
+.news-list { display: flex; flex-direction: column; gap: 6px; }
+.news-item {
+  display: flex; gap: 10px; align-items: baseline; padding: 8px 10px;
+  border-radius: 8px; background: var(--panel-2); text-decoration: none;
+  color: var(--text); font-size: 13px; border-left: 3px solid transparent;
+}
+.news-item:hover { background: #1d2637; }
+.news-item.hi { border-left-color: var(--red); }
+.news-item.mid { border-left-color: var(--yellow); }
+.news-src { flex: 0 0 auto; font-size: 11px; color: var(--muted); min-width: 76px; }
+.news-title { flex: 1; }
+.news-impact {
+  flex: 0 0 auto; font-size: 11px; font-weight: 700; color: var(--yellow);
+}
+@media (max-width: 700px) {
+  main { padding: 12px 10px; }
+  .news-item { flex-wrap: wrap; }
+  .news-src { min-width: 0; }
+}

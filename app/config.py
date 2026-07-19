@@ -56,8 +56,22 @@ class Settings(BaseSettings):
     scalper_entry_burst: float = float(os.getenv("SCALPER_ENTRY_BURST", "0.0020"))
     scalper_burst_window: float = float(os.getenv("SCALPER_BURST_WINDOW", "45"))
     scalper_cooldown: float = float(os.getenv("SCALPER_COOLDOWN", "180"))
+    # Absolute backstop on a day's realized loss.
     scalper_max_daily_loss: float = float(
-        os.getenv("SCALPER_MAX_DAILY_LOSS", "150")
+        os.getenv("SCALPER_MAX_DAILY_LOSS", "500")
+    )
+    # Daily loss budget as a fraction of live US buying power, so the limit
+    # scales with the account. The lower of this and the absolute backstop
+    # applies.
+    scalper_max_daily_loss_frac: float = float(
+        os.getenv("SCALPER_MAX_DAILY_LOSS_FRAC", "0.60")
+    )
+
+    # Record order-book depth and tape aggression while the app runs.
+    # On by default: it is the only source of the entry features that
+    # price/volume data provably lacks, and it costs one extra thread.
+    capture_enabled: bool = (
+        os.getenv("CAPTURE_ENABLED", "true").lower() == "true"
     )
 
     # --- Session risk ---

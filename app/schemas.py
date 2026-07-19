@@ -40,3 +40,23 @@ class SignalOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class BrokerCloseRequest(BaseModel):
+    """Sell a real broker position (exists at moomoo, not in our ledger)."""
+
+    code: str
+    qty: int
+    price: float
+
+
+class CancelRequest(BaseModel):
+    order_id: str
+
+
+class AmendRequest(BaseModel):
+    """Change price and/or quantity of a working order."""
+
+    order_id: str
+    qty: float
+    price: float

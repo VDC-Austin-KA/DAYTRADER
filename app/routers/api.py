@@ -10,7 +10,10 @@ from ..database import get_db
 from ..models import ModelMeta, PredictionTrade, Signal
 from ..prediction import bot as prediction_bot
 from ..prediction import risk as prediction_risk
-from ..schemas import CloseRequest, TradeRequest, TrainRequest
+from ..schemas import (
+    AmendRequest, BrokerCloseRequest, CancelRequest, CloseRequest,
+    TradeRequest, TrainRequest,
+)
 from ..trading import options, paper, signals
 from ..training import train_universe
 
@@ -334,6 +337,72 @@ def flip(req: CloseRequest, db: Session = Depends(get_db)):
                    f"{opposite} ${row['strike']} x{pos.quantity} @ ${price:.2f}",
         "position_id": new_pos.id,
     }
+
+
+# --- Live moomoo account (real balances, positions, working orders) ---
+
+@router.get("/account")
+def account():
+    """Real broker balances. Distinct from /api/portfolio, which is paper."""
+    from ..trading import moomoo_account as ma
+
+    if not ma.configured():
+        return {"ok": False, "message": "MOOMOO_OPEND_HOST not set."}
+    return ma.account_summary()
+
+
+@router.post("/trade/close_broker")
+def close_broker_position(req: BrokerCloseRequest):
+    """Sell a real broker position directly, bypassing the paper ledger.
+
+    These positions exist at the broker, not in our database -- they may
+    predate this app entirely -- so closing goes straight to moomoo.
+    """
+    from ..trading import moomoo_orders
+
+    if req.qty <= 0:
+        raise HTTPException(400, "Quantity must be positive.")
+    res = moomoo_orders.place_option_order(
+        symbol=req.code, contract_symbol=req.code,
+        side="SELL", quantity=req.qty, price=req.price,
+    )
+    if not res.ok:
+        raise HTTPException(400, f"moomoo rejected: {res.message}")
+    return {"message": f"Sell {req.qty} {req.code} submitted (#{res.order_id})."}
+
+
+@router.get("/broker/positions")
+def broker_positions():
+    from ..trading import moomoo_account as ma
+
+    return ma.positions()
+
+
+@router.get("/broker/orders")
+def broker_orders(open_only: bool = True):
+    from ..trading import moomoo_account as ma
+
+    return ma.orders(open_only=open_only)
+
+
+@router.post("/broker/orders/cancel")
+def broker_cancel(req: CancelRequest):
+    from ..trading import moomoo_account as ma
+
+    ok, msg = ma.cancel_order(req.order_id)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"message": msg}
+
+
+@router.post("/broker/orders/amend")
+def broker_amend(req: AmendRequest):
+    from ..trading import moomoo_account as ma
+
+    ok, msg = ma.amend_order(req.order_id, req.qty, req.price)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"message": msg}
 
 
 # --- BTC hourly prediction-market bot ---

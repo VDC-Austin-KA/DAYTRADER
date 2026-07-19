@@ -581,3 +581,147 @@ startTrainingPoll();  // surfaces any startup auto-training in progress
 setInterval(loadSummary, 60000);
 setInterval(checkDataSource, 60000);
 setInterval(loadMovers, 150000);  // movers rescan every 2.5 min (server caches 2 min)
+
+// ---------------------------------------------------------------------------
+// Live broker state: real balances, real positions, real working orders.
+// Distinct from the paper simulator, which keeps its own $100k fantasy.
+// ---------------------------------------------------------------------------
+
+function fmtCcy(n, ccy) {
+  const v = Math.abs(n).toLocaleString(undefined, {
+    minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${n < 0 ? "-" : ""}${v} ${ccy || ""}`.trim();
+}
+
+async function loadAccount() {
+  try {
+    const a = await api("/api/account");
+    const strip = $("#account-strip");
+    if (!a.ok) {
+      strip.innerHTML = `<div class="acct-item warn">Broker account unavailable — ${a.message || "gateway down"}</div>`;
+      return;
+    }
+    // US buying power is what a US options order can actually draw on; the
+    // base-currency total is shown separately so the two are never conflated.
+    strip.innerHTML = `
+      <div class="acct-item"><span>Buying power (US)</span><b>$${a.us_buying_power.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</b></div>
+      <div class="acct-item"><span>US cash</span><b>$${a.us_cash.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</b></div>
+      <div class="acct-item"><span>Total assets</span><b>${fmtCcy(a.total_assets, a.currency)}</b></div>
+      <div class="acct-item"><span>Positions value</span><b>${fmtCcy(a.market_value, a.currency)}</b></div>
+      <div class="acct-item"><span>Unrealized</span><b class="${pnlClass(a.unrealized_pl)}">${fmtCcy(a.unrealized_pl, a.currency)}</b></div>
+      <div class="acct-item"><span>Realized</span><b class="${pnlClass(a.realized_pl)}">${fmtCcy(a.realized_pl, a.currency)}</b></div>
+      <div class="acct-item"><span>Mode</span><b class="${a.env === "REAL" ? "neg" : ""}">${a.env}</b></div>`;
+  } catch (e) {
+    $("#account-strip").innerHTML =
+      `<div class="acct-item warn">Account error — ${e.message}</div>`;
+  }
+}
+
+async function loadBrokerPositions() {
+  try {
+    const rows = await api("/api/broker/positions");
+    const panel = $("#broker-positions-panel");
+    panel.hidden = !rows.length;
+    if (!rows.length) return;
+    $("#broker-positions-table tbody").innerHTML = rows.map(p => `
+      <tr>
+        <td title="${p.name}">${p.code}</td>
+        <td>${p.qty}</td>
+        <td>$${p.cost_price.toFixed(2)}</td>
+        <td>$${p.current_price.toFixed(2)}</td>
+        <td>${fmtCcy(p.market_value, p.currency)}</td>
+        <td class="${pnlClass(p.pl_val)}">${fmtCcy(p.pl_val, p.currency)}</td>
+        <td class="${pnlClass(p.pl_ratio)}">${p.pl_ratio.toFixed(2)}%</td>
+        <td><button class="btn sm red" onclick="closeBrokerPosition('${p.code}', ${p.can_sell_qty}, ${p.current_price})">Close</button></td>
+      </tr>`).join("");
+  } catch (e) { /* panel stays hidden */ }
+}
+
+async function closeBrokerPosition(code, qty, price) {
+  if (!qty) { toast("Nothing sellable in that position.", true); return; }
+  if (!confirm(`Sell ${qty} of ${code} at ~$${price.toFixed(2)}?\n\nThis is a REAL order.`)) return;
+  try {
+    const r = await api("/api/trade/close_broker", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, qty, price }),
+    });
+    toast(r.message);
+    loadBrokerPositions(); loadBrokerOrders(); loadAccount();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function loadBrokerOrders() {
+  try {
+    const rows = await api("/api/broker/orders");
+    const panel = $("#broker-orders-panel");
+    panel.hidden = !rows.length;
+    if (!rows.length) return;
+    $("#broker-orders-table tbody").innerHTML = rows.map(o => `
+      <tr>
+        <td title="${o.name}">${o.code}</td>
+        <td><span class="pill ${/BUY/i.test(o.side) ? "bullish" : "bearish"}">${o.side}</span></td>
+        <td>${o.qty}</td>
+        <td>$${o.price.toFixed(2)}</td>
+        <td>${o.dealt_qty}${o.dealt_avg_price ? ` @ $${o.dealt_avg_price.toFixed(2)}` : ""}</td>
+        <td>${o.status}${o.err ? ` <span class="muted" title="${o.err}">⚠</span>` : ""}</td>
+        <td class="pos-actions">
+          ${o.cancellable ? `
+            <button class="btn sm ghost" onclick='amendOrder(${JSON.stringify(o).replace(/'/g, "&apos;")})'>Edit</button>
+            <button class="btn sm red" onclick="cancelOrder('${o.order_id}')">Cancel</button>` : ""}
+        </td>
+      </tr>`).join("");
+  } catch (e) { /* panel stays hidden */ }
+}
+
+async function cancelOrder(id) {
+  if (!confirm("Cancel this working order?")) return;
+  try {
+    const r = await api("/api/broker/orders/cancel", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order_id: id }),
+    });
+    toast(r.message);
+    loadBrokerOrders(); loadAccount();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function amendOrder(o) {
+  const price = prompt(`New limit price for ${o.code}:`, o.price.toFixed(2));
+  if (price === null) return;
+  const qty = prompt(`New quantity for ${o.code}:`, o.qty);
+  if (qty === null) return;
+  try {
+    const r = await api("/api/broker/orders/amend", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        order_id: o.order_id, qty: parseFloat(qty), price: parseFloat(price) }),
+    });
+    toast(r.message);
+    loadBrokerOrders(); loadAccount();
+  } catch (e) { toast(e.message, true); }
+}
+
+function refreshBroker() {
+  loadAccount(); loadBrokerPositions(); loadBrokerOrders();
+}
+
+$("#orders-refresh").addEventListener("click", refreshBroker);
+$("#broker-flatten").addEventListener("click", async () => {
+  const rows = await api("/api/broker/positions");
+  if (!rows.length) return;
+  if (!confirm(`Close ALL ${rows.length} live position(s)?\n\nThis sends REAL sell orders.`)) return;
+  for (const p of rows) {
+    if (!p.can_sell_qty) continue;
+    try {
+      await api("/api/trade/close_broker", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: p.code, qty: p.can_sell_qty, price: p.current_price }),
+      });
+    } catch (e) { /* keep going; one failure must not strand the rest */ }
+  }
+  toast("Flatten sent.");
+  refreshBroker();
+});
+
+refreshBroker();
+setInterval(refreshBroker, 15000);

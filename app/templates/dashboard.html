@@ -38,7 +38,47 @@
   <div id="training-banner" class="banner info hidden"></div>
 
   <main>
-    <section class="cards" id="summary-cards"></section>
+    <!-- Live broker state first: open trades and working orders are what you
+         act on. The account strip below is reference, so it stays compact. -->
+    <section class="panel live-panel" id="broker-positions-panel" hidden>
+      <div class="panel-head">
+        <h2>📈 Open Trades <span class="muted">— live from moomoo</span></h2>
+        <button id="broker-flatten" class="btn sm red">Close all</button>
+      </div>
+      <div class="table-scroll">
+        <table id="broker-positions-table">
+          <thead>
+            <tr><th>Contract</th><th>Qty</th><th>Cost</th><th>Now</th>
+            <th>Mkt Value</th><th>P&amp;L</th><th>P&amp;L %</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel live-panel" id="broker-orders-panel" hidden>
+      <div class="panel-head">
+        <h2>📋 Working Orders <span class="muted">— cancel or edit</span></h2>
+        <button id="orders-refresh" class="btn ghost sm">Refresh</button>
+      </div>
+      <div class="table-scroll">
+        <table id="broker-orders-table">
+          <thead>
+            <tr><th>Contract</th><th>Side</th><th>Qty</th><th>Price</th>
+            <th>Filled</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Real account balances, compact. -->
+    <section class="account-strip" id="account-strip"></section>
+
+    <details class="paper-fold">
+      <summary>Paper-trading simulator <span class="muted">(not your real account)</span></summary>
+      <section class="cards" id="summary-cards"></section>
+    </details>
 
     <!-- Open positions ride at the top and stay put: closing a live position
          is the most time-critical action on this page, so it must never be

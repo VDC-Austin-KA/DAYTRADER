@@ -217,3 +217,38 @@ th.sortable:hover { color: #fff; }
 .buy-cell .row-qty::-webkit-outer-spin-button,
 .buy-cell .row-qty::-webkit-inner-spin-button { opacity: 1; }
 .pos-actions { display: flex; gap: 6px; white-space: nowrap; }
+
+/* --- Live broker panels + compact account strip ----------------------- */
+.live-panel { border-color: var(--blue); margin-bottom: 14px; }
+
+/* Real balances are reference, not the headline: one dense row instead of
+   six large cards. */
+.account-strip {
+  display: flex; flex-wrap: wrap; gap: 0;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; margin-bottom: 14px; overflow: hidden;
+}
+.acct-item {
+  flex: 1 1 auto; min-width: 130px; padding: 8px 14px;
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.acct-item:last-child { border-right: none; }
+.acct-item span {
+  font-size: 10px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.acct-item b { font-size: 15px; font-weight: 700; }
+.acct-item.warn { color: #ffe0a0; flex-basis: 100%; }
+
+/* The paper simulator is collapsed by default -- it is not the real
+   account and shouldn't be mistaken for it. */
+.paper-fold {
+  border: 1px dashed var(--border); border-radius: 10px;
+  padding: 8px 12px; margin-bottom: 16px;
+}
+.paper-fold > summary {
+  cursor: pointer; font-size: 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.paper-fold .cards { margin-top: 12px; margin-bottom: 4px; }

@@ -55,6 +55,10 @@ BURST_WINDOW = float(os.getenv("SCALPER_BURST_WINDOW", "45"))     # seconds
 COOLDOWN = float(os.getenv("SCALPER_COOLDOWN", "120"))            # seconds
 QTY = int(os.getenv("SCALPER_QTY", "5"))
 TRADE_MODE = os.getenv("SCALPER_TRADE_MODE", "paper").lower()
+# Daily circuit breaker: once today's realized P&L is at or below -this,
+# no more entries until tomorrow. Exits keep running -- the breaker stops
+# digging, it never blocks getting out.
+MAX_DAILY_LOSS = float(os.getenv("SCALPER_MAX_DAILY_LOSS", "200"))
 RESUBSCRIBE_SECS = 60.0        # refresh ATM strikes this often
 
 
@@ -236,6 +240,24 @@ def main() -> int:   # pragma: no cover - needs a live gateway
 
                 # --- ENTRIES: burst rule, one position at a time.
                 can, _why = sess.can_open()
+                if can and not open_pos and now - last_entry > COOLDOWN:
+                    from sqlalchemy import func
+
+                    from .models import Trade
+
+                    today = sess.now_ct().date()
+                    realized = float(db.query(
+                        func.coalesce(func.sum(Trade.realized_pnl), 0.0)
+                    ).filter(
+                        Trade.portfolio_id == pf.id,
+                        Trade.side == "sell",
+                        func.date(Trade.timestamp) == today.isoformat(),
+                    ).scalar() or 0.0)
+                    if realized <= -MAX_DAILY_LOSS:
+                        can = False
+                        log.warning(
+                            "circuit breaker: today %.2f <= -%.2f; no more "
+                            "entries today", realized, MAX_DAILY_LOSS)
                 if (can and not open_pos and now - last_entry > COOLDOWN):
                     direction = detect_burst()
                     if direction:

@@ -13,3 +13,7 @@ models_store/
 *.log
 backtest_cache/
 backtest_out.log
+holdout_results.json
+sweep_out_*.json
+slice*.json
+drive*.py

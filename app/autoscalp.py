@@ -93,6 +93,26 @@ def _record_spot(price: float) -> None:
         _spot_path.popleft()
 
 
+def _recent_daily_pnl(db, pf, days: int = 10) -> list[float]:
+    """Realized P&L per day, most recent first, for the sizing multiplier."""
+    from sqlalchemy import func
+
+    from .models import Trade
+
+    rows = (
+        db.query(
+            func.date(Trade.timestamp).label("d"),
+            func.coalesce(func.sum(Trade.realized_pnl), 0.0).label("pnl"),
+        )
+        .filter(Trade.portfolio_id == pf.id, Trade.side == "sell")
+        .group_by("d")
+        .order_by(func.date(Trade.timestamp).desc())
+        .limit(days)
+        .all()
+    )
+    return [float(r.pnl or 0.0) for r in rows]
+
+
 def detect_burst() -> str | None:
     """'up' / 'down' if the underlying moved ENTRY_BURST inside the window."""
     if len(_spot_path) < 2:
@@ -284,13 +304,36 @@ def main() -> int:   # pragma: no cover - needs a live gateway
                                 pick = (code, meta, ask)
                         if pick:
                             code, meta, ask = pick
-                            pos, msg = paper.open_position(
-                                db, pf, UNDERLYING, meta["right"], code,
-                                meta["strike"], expiry, QTY, ask,
-                                note=f"autoscalp burst-{direction}")
-                            log.warning("ENTRY %s %s x%d @ %.2f -> %s",
-                                        direction, code, QTY, ask, msg)
-                            last_entry = now
+                            # Size from equity and recent DAILY results --
+                            # never from conviction, and never larger after
+                            # a win. This is the rule the 702-trip history
+                            # says the account actually needed.
+                            from .trading import moomoo_account, sizing
+
+                            acct = moomoo_account.account_summary()
+                            bp = (float(acct.get("us_buying_power") or 0)
+                                  if acct.get("ok") else 0.0)
+                            equity = float(acct.get("us_assets") or 0) or bp
+                            decision = sizing.contracts_for(
+                                equity=equity, entry_price=ask,
+                                stop_pct=brackets.STOP_LOSS_PCT,
+                                recent_daily_pnl=_recent_daily_pnl(db, pf),
+                                buying_power=bp,
+                                bp_fraction=settings.buying_power_fraction,
+                                max_contracts=QTY,
+                            )
+                            if decision.contracts <= 0:
+                                log.info("entry skipped: %s", decision.reason)
+                            else:
+                                pos, msg = paper.open_position(
+                                    db, pf, UNDERLYING, meta["right"], code,
+                                    meta["strike"], expiry,
+                                    decision.contracts, ask,
+                                    note=f"autoscalp burst-{direction}")
+                                log.warning("ENTRY %s %s %s @ %.2f -> %s",
+                                            direction, code,
+                                            decision.describe(), ask, msg)
+                                last_entry = now
             finally:
                 db.close()
 

@@ -223,7 +223,14 @@ def scan_universe(refresh: bool = False, per_symbol: int = 6) -> dict:
     from . import universe as uni
 
     watchlist = uni.get_universe(refresh=refresh)
-    for sym in watchlist:
+    # OpenD caps get_option_chain at 10 calls / 30s. Scanning the whole
+    # universe unpaced blew straight through it and most chains came back
+    # empty, which surfaced as "0 ranked contracts" with no error. Pace to
+    # stay just inside the limit; the scan cache absorbs the extra wall time.
+    chain_pause = 30.0 / 9
+    for idx, sym in enumerate(watchlist):
+        if idx:
+            time.sleep(chain_pause)
         try:
             reading = compute_surge(sym)
         except Exception:

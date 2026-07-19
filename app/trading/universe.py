@@ -61,8 +61,16 @@ def _num(row, col, default=0.0) -> float:
         return default
 
 
-def score_candidates(limit: int = 18, min_turnover: float = 5e7) -> list[dict]:
-    """Rank the pool. Returns the top ``limit`` with their component scores."""
+def score_candidates(limit: int = 18, min_turnover: float = 5e7,
+                     max_price: float | None = None) -> list[dict]:
+    """Rank the pool. Returns the top ``limit`` with their component scores.
+
+    ``max_price`` gates on TRADEABILITY, not quality. An ATM weekly premium
+    runs roughly 1-3% of spot, so a $1,350 stock has ~$20-40 options -- far
+    past the movers premium cap, and past what this account can fund. A
+    name whose options cannot be bought is not a trade idea however hot it
+    is, and ranking it merely pushes out names that are.
+    """
     from ..data import moomoo_data as mm
 
     if not mm.configured() or not mm._reachable():
@@ -82,6 +90,8 @@ def score_candidates(limit: int = 18, min_turnover: float = 5e7) -> list[dict]:
             vol = _num(r, "volume")
             if price <= 0 or turnover < min_turnover:
                 continue          # illiquid: option spreads would eat it
+            if max_price and price > max_price:
+                continue          # ATM premium would exceed the cap
             change_pct = ((price / prev - 1.0) * 100) if prev else 0.0
             rows.append({
                 "symbol": sym, "price": round(price, 2),
@@ -154,13 +164,24 @@ def _rank_extras(limit: int = 6) -> list[str]:
     return out
 
 
+def affordable_price_ceiling() -> float:
+    """Highest underlying price whose ATM options plausibly fit the cap.
+
+    Premium ~= 2% of spot for a near-dated ATM contract, so the ceiling is
+    about 50x the max premium. Deliberately generous: the chain scan does
+    the exact filtering, this only stops obviously untradeable names from
+    crowding out the rest.
+    """
+    return max(50.0, settings.movers_max_premium * 50)
+
+
 def get_universe(refresh: bool = False, limit: int = 18) -> list[str]:
     """Today's working watchlist. Falls back to the configured list."""
     now = time.time()
     if not refresh and _cache["universe"] and now - _cache["ts"] < _CACHE_TTL:
         return _cache["universe"]
 
-    scored = score_candidates(limit=limit)
+    scored = score_candidates(limit=limit, max_price=affordable_price_ceiling())
     syms = [r["symbol"] for r in scored]
     for extra in _rank_extras():
         if extra and extra not in syms and len(syms) < limit + 6:
@@ -177,4 +198,4 @@ def universe_detail(refresh: bool = False, limit: int = 18) -> list[dict]:
     """Scored rows, for showing WHY each name is in the list."""
     if refresh:
         _cache["ts"] = 0.0
-    return score_candidates(limit=limit)
+    return score_candidates(limit=limit, max_price=affordable_price_ceiling())

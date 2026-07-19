@@ -631,10 +631,19 @@ function initMoversTable() {
 
 // Populate dropdowns from the values actually present in the current scan.
 function refreshMoversFilterOptions() {
+  // loadMovers can resolve before initMoversTable has built the row, in
+  // which case there are no selects to fill. Build it first.
+  if (!document.querySelector("#movers-table .col-filter")) initMoversTable();
   document.querySelectorAll("#movers-table select.col-filter").forEach(sel => {
     const key = sel.dataset.k;
-    const seen = [...new Set(moversRows.map(o =>
-      String(moversFilterValue(o, key))))].sort();
+    const raw = [...new Set(moversRows.map(o => moversFilterValue(o, key)))];
+    const seen = raw
+      .sort((a, b) => {
+        const na = parseFloat(a), nb = parseFloat(b);
+        if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+        return String(a).localeCompare(String(b));
+      })
+      .map(String);
     const keep = sel.value;
     sel.innerHTML = `<option value="">all</option>` +
       seen.map(v => `<option value="${v}">${v}</option>`).join("");
@@ -648,6 +657,7 @@ async function loadMovers(refresh = false) {
   try {
     const r = await api(`/api/movers${refresh ? "?refresh=true" : ""}`);
     moversRows = r.options;
+    refreshMoversFilterOptions();
     renderHeadlines(r.headlines);
     renderPlays(r.plays);
     drawMoversTable();

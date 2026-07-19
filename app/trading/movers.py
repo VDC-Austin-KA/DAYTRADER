@@ -217,7 +217,13 @@ def scan_universe(refresh: bool = False, per_symbol: int = 6) -> dict:
     all_options: list[dict] = []
     plays: list[Play] = []
 
-    for sym in settings.movers_watchlist:
+    # Dynamic universe: what is actually in play today (unusual volume,
+    # movement, liquidity, short interest) rather than a list fixed months
+    # ago. Falls back to the configured watchlist if the gateway is down.
+    from . import universe as uni
+
+    watchlist = uni.get_universe(refresh=refresh)
+    for sym in watchlist:
         try:
             reading = compute_surge(sym)
         except Exception:
@@ -263,7 +269,7 @@ def scan_universe(refresh: bool = False, per_symbol: int = 6) -> dict:
     headlines = _make_headlines(readings, plays)
     result = {
         "generated_at": now,
-        "watchlist": settings.movers_watchlist,
+        "watchlist": watchlist,
         "readings": [asdict(r) for r in sorted(readings, key=lambda r: r.surge, reverse=True)],
         "options": all_options[:settings.movers_table_size],
         "plays": [asdict(p) for p in plays[:8]],

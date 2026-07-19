@@ -288,3 +288,9 @@ th.sortable:hover { color: #fff; }
 #tv-chart-container { height: 620px; width: 100%; }
 @media (max-width: 700px) { #tv-chart-container { height: 460px; } }
 .px-contract { font-weight: 700; white-space: nowrap; }
+.rangebox { display: flex; gap: 3px; }
+.rangebox .col-filter { width: 50%; min-width: 0; }
+select.col-filter {
+  width: 100%; font-size: 11px; padding: 3px 4px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+}

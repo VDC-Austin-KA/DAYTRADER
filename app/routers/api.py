@@ -339,6 +339,16 @@ def flip(req: CloseRequest, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/universe")
+def universe(refresh: bool = False, limit: int = 18):
+    """Today's dynamic movers universe with the scores that put each name
+    in it -- unusual volume, movement, liquidity, short interest."""
+    from ..trading import universe as uni
+
+    return {"universe": uni.get_universe(refresh=refresh, limit=limit),
+            "detail": uni.universe_detail(refresh=refresh, limit=limit)}
+
+
 @router.get("/intraday/{symbol}")
 def intraday(symbol: str, interval: str = "1m", extended: bool = True):
     """Intraday OHLCV with premarket/after-hours plus RSI and AO."""

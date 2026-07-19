@@ -534,21 +534,57 @@ function moversRowHtml(o) {
   </tr>`;
 }
 
+// Column filters. Text substring boxes were useless on numeric columns
+// (typing "5" matched 5, 15, 0.05...). Categorical columns now get a
+// dropdown of the values actually present; numeric columns get a min/max
+// pair, so "POP >= 40 and cost <= 100" is expressible.
+const MOVERS_NUMERIC = new Set([
+  "strike", "dte", "cost", "prob_profit", "success",
+  "potential_return", "surge", "blended_score",
+]);
+// Columns whose stored value is a fraction but displayed as a percent --
+// filter input is in the DISPLAYED units, which is what the user sees.
+const MOVERS_PCT = new Set(["prob_profit", "success", "potential_return"]);
+
+function moversFilterValue(o, key) {
+  if (key === "whipsaw") return o.whipsaw ? "yes" : "no";
+  const v = o[key];
+  return MOVERS_PCT.has(key) ? v * 100 : v;
+}
+
+function moversPasses(o) {
+  for (const el of document.querySelectorAll("#movers-table .col-filter")) {
+    const key = el.dataset.k;
+    const raw = el.value.trim();
+    if (!raw) continue;
+    const val = moversFilterValue(o, key);
+    if (el.dataset.range) {
+      const n = parseFloat(raw);
+      if (!Number.isFinite(n)) continue;
+      if (el.dataset.range === "min" && !(Number(val) >= n)) return false;
+      if (el.dataset.range === "max" && !(Number(val) <= n)) return false;
+    } else if (String(val).toLowerCase() !== raw.toLowerCase()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function drawMoversTable() {
-  const filters = [...document.querySelectorAll("#movers-table .col-filter")]
-    .map(inp => ({ key: inp.dataset.k, q: inp.value.trim().toLowerCase() }))
-    .filter(f => f.q);
-  let rows = moversRows.filter(o =>
-    filters.every(f => String(f.key === 'whipsaw' ? (o.whipsaw ? 'yes' : 'no') : o[f.key])
-      .toLowerCase().includes(f.q)));
+  let rows = moversRows.filter(moversPasses);
   const { key, dir, numeric } = moversSort;
-  rows = rows.slice().sort((a, b) => {
-    const av = a[key], bv = b[key];
-    return dir * (numeric ? (av - bv) : String(av).localeCompare(String(bv)));
-  });
+  if (key) {
+    rows = rows.slice().sort((a, b) => {
+      const av = a[key], bv = b[key];
+      const c = numeric ? (av - bv) : String(av).localeCompare(String(bv));
+      return dir === "asc" ? c : -c;
+    });
+  }
   $("#movers-table tbody").innerHTML = rows.length
     ? rows.map(moversRowHtml).join("")
     : `<tr><td colspan="15" class="muted">Nothing matches the filters.</td></tr>`;
+  const meta = $("#movers-filter-count");
+  if (meta) meta.textContent = `${rows.length} / ${moversRows.length} shown`;
 }
 
 function initMoversTable() {
@@ -557,19 +593,53 @@ function initMoversTable() {
   filterRow.innerHTML = "";
   head.forEach(th => {
     const td = document.createElement("th");
-    if (th.dataset.k) {
-      td.innerHTML = `<input class="col-filter" data-k="${th.dataset.k}" placeholder="filter" />`;
+    const key = th.dataset.k;
+    if (key) {
+      if (MOVERS_NUMERIC.has(key)) {
+        td.innerHTML =
+          `<div class="rangebox">
+             <input class="col-filter" data-k="${key}" data-range="min"
+                    type="number" step="any" placeholder="min">
+             <input class="col-filter" data-k="${key}" data-range="max"
+                    type="number" step="any" placeholder="max">
+           </div>`;
+      } else {
+        td.innerHTML = `<select class="col-filter" data-k="${key}">
+                          <option value="">all</option>
+                        </select>`;
+      }
       th.classList.add("sortable");
       th.addEventListener("click", () => {
-        const numeric = "num" in th.dataset;
-        if (moversSort.key === th.dataset.k) moversSort.dir *= -1;
-        else moversSort = { key: th.dataset.k, dir: numeric ? -1 : 1, numeric };
+        const numeric = th.dataset.num !== undefined;
+        moversSort = moversSort.key === key
+          ? { key, dir: moversSort.dir === "asc" ? "desc" : "asc", numeric }
+          : { key, dir: "desc", numeric };
         drawMoversTable();
       });
     }
     filterRow.appendChild(td);
   });
   filterRow.addEventListener("input", drawMoversTable);
+  filterRow.addEventListener("change", drawMoversTable);
+  const reset = $("#movers-filter-reset");
+  if (reset) reset.addEventListener("click", () => {
+    document.querySelectorAll("#movers-table .col-filter")
+      .forEach(el => { el.value = ""; });
+    drawMoversTable();
+  });
+}
+
+// Populate dropdowns from the values actually present in the current scan.
+function refreshMoversFilterOptions() {
+  document.querySelectorAll("#movers-table select.col-filter").forEach(sel => {
+    const key = sel.dataset.k;
+    const seen = [...new Set(moversRows.map(o =>
+      String(moversFilterValue(o, key))))].sort();
+    const keep = sel.value;
+    sel.innerHTML = `<option value="">all</option>` +
+      seen.map(v => `<option value="${v}">${v}</option>`).join("");
+    if (seen.includes(keep)) sel.value = keep;
+  });
 }
 
 async function loadMovers(refresh = false) {

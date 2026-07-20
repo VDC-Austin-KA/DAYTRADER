@@ -70,6 +70,15 @@ pause & exit /b 1
 :serverup
 echo  [OK] Dashboard running
 
+REM --- 4b. Start the autonomous scalper -------------------------------
+REM Separate process from the dashboard so a crash in one never takes the
+REM other down, and its log is isolated. This is the engine that places
+REM ENTRIES; without it the app only manages exits and records data.
+echo  [..] Starting autonomous scalper (%SCALPER_TRADE_MODE% mode)
+start "DAYTRADER scalper" /min cmd /c "%PY% -m app.autoscalp > scalper.log 2>&1"
+call :sleep 3
+findstr /C:"autoscalp starting" scalper.log >nul 2>&1 && echo  [OK] Scalper running || echo  [!] Scalper may not have started - check scalper.log
+
 REM --- 5. Cloudflare tunnel ------------------------------------------
 where cloudflared >nul 2>&1
 if errorlevel 1 (

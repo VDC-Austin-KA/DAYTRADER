@@ -115,6 +115,77 @@ def bracket_monitor() -> None:
     finally:
         db.close()
 
+    # Also manage REAL broker positions -- the manual trades placed directly
+    # in moomoo, which never touch the app DB. Without this, the brackets
+    # only ever saw app-initiated trades, so a hand-placed position got no
+    # automated exit at all (the reported failure).
+    if settings.manage_broker_exits:
+        _bracket_broker_positions()
+
+
+# Bracket states for real broker positions, keyed by contract code (broker
+# positions have no app id).
+_broker_states: dict = {}
+
+
+def _bracket_broker_positions() -> None:
+    from .data import moomoo_data as mm
+    from .trading import brackets, moomoo_account, moomoo_orders
+
+    positions = moomoo_account.positions()
+    live_codes = {p["code"] for p in positions if p.get("qty", 0) > 0}
+    for code in list(_broker_states):
+        if code not in live_codes:
+            del _broker_states[code]
+    if not positions:
+        return
+
+    codes = [p["code"] for p in positions if p.get("qty", 0) > 0]
+    snap = mm._call("get_market_snapshot", codes)
+    if snap is None or len(snap) == 0:
+        return
+    bids = {str(r["code"]): float(r.get("bid_price") or 0)
+            for _, r in snap.iterrows()}
+
+    for p in positions:
+        code = p["code"]
+        qty = int(p.get("can_sell_qty") or 0)
+        if qty <= 0:
+            continue
+        cost = float(p.get("cost_price") or 0)
+        if cost <= 0:
+            continue
+        st = _broker_states.get(code)
+        if st is None:
+            st = brackets.BracketState(position_id=0, entry_price=cost,
+                                       quantity=qty)
+            _broker_states[code] = st
+            log.info("broker bracket armed %s: %s", code, st.describe())
+        if qty < st.remaining:            # user sold some by hand
+            st.remaining = qty
+
+        bid = bids.get(code, 0.0)
+        action = brackets.check(st, bid)
+        if action.kind == "none":
+            continue
+        res = moomoo_orders.place_option_order(code, code, "SELL",
+                                               action.sell_qty, bid)
+        ok = res.ok
+        log.warning("BROKER BRACKET %s %s: %s -> %s",
+                    action.kind, code, action.reason,
+                    res.message if not ok else f"sold {action.sell_qty} @ {bid}")
+        if ok:
+            from .trading import notify
+
+            notify.record("exit", f"AUTO-SOLD {action.sell_qty} x {code}",
+                          f"{action.kind} @ ${bid:.2f}. {action.reason}",
+                          level="trade", code=code, qty=action.sell_qty)
+        else:
+            st.closed = False
+            st.remaining += action.sell_qty
+            if action.kind == "scale_out":
+                st.scaled_out = False
+
 
 def flatten_all_positions() -> None:
     """Force-close every open position. Runs every minute; acts near the bell.

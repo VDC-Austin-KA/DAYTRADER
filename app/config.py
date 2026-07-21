@@ -74,6 +74,13 @@ class Settings(BaseSettings):
         os.getenv("CAPTURE_ENABLED", "true").lower() == "true"
     )
 
+    # Manage brackets on REAL broker positions (manual moomoo trades), not
+    # just app-opened ones. On by default: the automated exits are useless
+    # if they cannot see the positions the user actually holds.
+    manage_broker_exits: bool = (
+        os.getenv("MANAGE_BROKER_EXITS", "true").lower() == "true"
+    )
+
     # --- Session risk ---
     # Hard no-overnight rule: block entries after the cutoff and force-flatten
     # before the bell. Overnight gaps cannot be stopped out of -- there are no

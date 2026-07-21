@@ -234,6 +234,17 @@ def main() -> int:   # pragma: no cover - needs a live gateway
         while True:
             now = time.time()
 
+            # Roll the expiry each calendar day. The daemon runs overnight,
+            # so an expiry pinned at startup goes stale by morning -- which
+            # made every entry target a dead contract and get blocked. Re-read
+            # it and drop the previous day's subscribed contracts.
+            today = sess.now_ct().strftime("%Y-%m-%d")
+            if today != expiry:
+                log.info("rolling expiry %s -> %s", expiry, today)
+                expiry = today
+                contracts.clear()
+                last_resub = 0.0
+
             # Refresh the ATM contract set periodically (spot drifts).
             if now - last_resub > RESUBSCRIBE_SECS and CACHE.spot:
                 fresh = _atm_contracts(q, expiry)

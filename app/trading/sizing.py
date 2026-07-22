@@ -93,6 +93,8 @@ def contracts_for(
     bp_fraction: float = 0.6667,
     risk_per_trade: float = RISK_PER_TRADE,
     max_contracts: int = MAX_CONTRACTS,
+    allow_floor: bool = True,
+    max_loss_per_trade: float = 0.0,
 ) -> SizingDecision:
     """How many contracts to buy. Zero is a valid, common answer."""
     if equity <= 0 or entry_price <= 0 or stop_pct <= 0:
@@ -114,6 +116,27 @@ def contracts_for(
             why += f"; capped by buying power (${buying_power:,.0f})"
 
     n = max(0, min(n, max_contracts))
-    if n == 0:
+
+    # One-contract floor. On a small account the 2%-risk budget can round
+    # below a single contract, which made the daemon skip EVERY entry --
+    # inert automation. One contract is the atomic tradable unit, so if
+    # buying power can afford it AND its worst-case loss stays within the
+    # per-trade loss ceiling, take one rather than nothing. This trades a
+    # bit more than 2% on the smallest accounts by necessity; it never
+    # exceeds what the account can fund.
+    if n == 0 and allow_floor:
+        one_cost = entry_price * 100
+        one_risk = risk_per_contract
+        # Fall back to equity when buying power is unknown, so the floor
+        # can never put more than bp_fraction of the account into one lot.
+        cap_base = buying_power if buying_power else equity
+        can_afford = one_cost <= cap_base * bp_fraction
+        within_ceiling = max_loss_per_trade <= 0 or one_risk <= max_loss_per_trade
+        if can_afford and within_ceiling:
+            return SizingDecision(1, mult, equity,
+                                  why + "; 1-contract floor (risk budget "
+                                  "rounded below 1, buying power allows)")
+        why += "; below one contract -> no trade"
+    elif n == 0:
         why += "; below one contract -> no trade"
     return SizingDecision(n, mult, equity, why)

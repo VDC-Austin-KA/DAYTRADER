@@ -107,3 +107,67 @@ def test_failed_sell_can_be_retried():
     st.remaining += a.sell_qty
     a2 = brackets.check(st, 0.71)
     assert a2.kind == "scale_out" and a2.sell_qty == 5
+
+
+# --- Time-based exits: give-up on a stall, and the hard time backstop ----
+
+def test_time_rules_are_inert_without_minutes_held():
+    """Callers that don't pass minutes_held get the price-only machine."""
+    st = brackets.BracketState(
+        position_id=1, entry_price=0.40, quantity=10,
+        give_up_minutes=15, max_hold_minutes=30)
+    # Flat, unprofitable bid held forever: no minutes_held => never cut here.
+    for _ in range(50):
+        assert brackets.check(st, 0.39).kind == "none"
+    assert not st.closed
+
+
+def test_give_up_cuts_a_stalled_position_after_the_deadline():
+    """A dead-flat contract is cut at the deadline, before the -35% floor."""
+    st = brackets.BracketState(
+        position_id=1, entry_price=0.40, quantity=10, give_up_minutes=15)
+    # +10% give-up price is 0.44; bid sits at 0.39 (a small loss, above the
+    # 0.26 hard stop). Before the deadline: hold. At it: cut.
+    assert brackets.check(st, 0.39, minutes_held=14).kind == "none"
+    a = brackets.check(st, 0.39, minutes_held=15)
+    assert a.kind == "give_up" and a.sell_qty == 10 and a.est_price == 0.39
+    assert st.closed
+
+
+def test_give_up_is_spared_when_progress_is_made():
+    """Clear +give_up_progress by the deadline and the cut is waived."""
+    st = brackets.BracketState(
+        position_id=1, entry_price=0.40, quantity=10,
+        give_up_minutes=15, give_up_progress=0.10)
+    # Bid 0.45 >= give-up price 0.44: progress made, hold past the deadline.
+    assert brackets.check(st, 0.45, minutes_held=20).kind == "none"
+    assert not st.closed
+
+
+def test_give_up_does_not_fire_once_scaled_out():
+    """A runner that banked its win rides the trail, not the give-up rule."""
+    st = brackets.BracketState(
+        position_id=1, entry_price=0.40, quantity=10, give_up_minutes=15)
+    _run(st, [0.70])                       # scale out at +75%, trail armed
+    assert st.scaled_out
+    # Long after the deadline, bid back near entry but above the trail: the
+    # give-up rule must stay silent -- only the trail governs the runner.
+    a = brackets.check(st, 0.60, minutes_held=40)
+    assert a.kind == "none" and not st.closed
+
+
+def test_hard_stop_still_outranks_the_give_up_deadline():
+    """A gap through the floor at the deadline exits as a hard stop, not give_up."""
+    st = brackets.BracketState(
+        position_id=1, entry_price=0.40, quantity=10, give_up_minutes=15)
+    a = brackets.check(st, 0.20, minutes_held=20)   # 0.20 < 0.26 hard stop
+    assert a.kind == "hard_stop" and a.sell_qty == 10
+
+
+def test_max_hold_time_stop_flattens_everything():
+    """The absolute backstop exits the whole position regardless of P&L."""
+    st = brackets.BracketState(
+        position_id=1, entry_price=0.40, quantity=10, max_hold_minutes=30)
+    assert brackets.check(st, 0.50, minutes_held=29).kind == "none"
+    a = brackets.check(st, 0.50, minutes_held=30)
+    assert a.kind == "time_stop" and a.sell_qty == 10 and st.closed

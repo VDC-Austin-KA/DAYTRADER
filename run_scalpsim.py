@@ -4,6 +4,19 @@ Usage:
   python run_scalpsim.py '{"burst_bps": 8}'                 # one config, train
   python run_scalpsim.py '{"grid": {...}}' --out slice.json # sweep a slice
   python run_scalpsim.py '{"burst_bps": 8}' --holdout       # holdout period
+  python run_scalpsim.py '{"burst_bps": 8}' --stress        # cost robustness
+
+Tuning the time-based exits (see app/trading/brackets.py):
+  python run_scalpsim.py '{"grid": {"give_up_minutes": [0, 10, 15, 20],
+                                     "give_up_progress": [0.1, 0.2]}}'
+Pick on train; confirm the winner ONCE on --holdout. The give-up rule is a
+loss-cutter -- look for a higher profit_factor / less-negative avg_loss and a
+better sharpe, not just a bigger total, and check --stress before believing it.
+
+``--stress`` re-runs the chosen config across an IV / IV-crush / spread grid.
+Option premiums here are modelled, not observed, so a config that only wins at
+one IV/spread point is a picture of that assumption, not an edge. A rule worth
+trading survives the whole cost envelope.
 """
 import itertools
 import json
@@ -16,6 +29,14 @@ from app.backtest.scalpsim import SimParams, simulate
 
 TRAIN = ("2025-01-01", "2026-02-28")
 HOLDOUT = ("2026-03-01", "2026-07-17")
+
+# Cost envelope for --stress: the assumptions the modelled P&L is most
+# sensitive to on 0DTE. Every combination is run and reported.
+STRESS_GRID = {
+    "iv": [0.10, 0.15, 0.20, 0.25],
+    "entry_iv_mult": [1.0, 1.10, 1.20],
+    "half_spread": [0.01, 0.02, 0.03],
+}
 
 
 def load(period):
@@ -32,13 +53,23 @@ def main():
     else:
         spec = json.loads(arg)
     holdout = "--holdout" in sys.argv
+    stress = "--stress" in sys.argv
     out_path = None
     if "--out" in sys.argv:
         out_path = sys.argv[sys.argv.index("--out") + 1]
     bars = load(HOLDOUT if holdout else TRAIN)
 
     results = []
-    if "grid" in spec:
+    if stress:
+        # Hold every non-cost knob from the base spec fixed; sweep the cost
+        # envelope so robustness (not a single lucky point) is what's judged.
+        base = {k: v for k, v in spec.items() if k != "grid"}
+        keys = list(STRESS_GRID)
+        for combo in itertools.product(*(STRESS_GRID[k] for k in keys)):
+            kw = {**base, **dict(zip(keys, combo))}
+            r = simulate(bars, SimParams(**kw))
+            results.append({"params": dict(zip(keys, combo)), **r.summary()})
+    elif "grid" in spec:
         grid = spec["grid"]
         keys = list(grid)
         for combo in itertools.product(*(grid[k] for k in keys)):

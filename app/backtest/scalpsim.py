@@ -65,6 +65,13 @@ class SimParams:
     stop_pct: float = 0.35
     cooldown_bars: int = 5
     qty: int = 5
+    # Time-based exits (see app/trading/brackets.py). 0 disables each.
+    # give_up_minutes: cut an unscaled position that has not reached
+    # +give_up_progress by the deadline -- the 0DTE theta-bleed loss the
+    # -stop_pct floor never catches. max_hold_minutes: hard time backstop.
+    give_up_minutes: float = 0.0
+    give_up_progress: float = 0.10
+    max_hold_minutes: float = 0.0
     iv: float = 0.15              # annualised; stress 0.10-0.25
     # Entry premium is priced at iv * this multiple: post-burst IV is
     # richer than the IV you exit at. 1.10 = a 10% IV-crush toll per trade.
@@ -105,12 +112,38 @@ class SimResult:
         kinds: dict[str, int] = {}
         for e in self.episodes:
             kinds[e.exit_kind] = kinds.get(e.exit_kind, 0) + 1
+
+        # Win/loss anatomy: expectancy alone hides HOW it is earned. A
+        # profit factor near 1 with a fat payoff is a very different (and
+        # more fragile) bet than one built on a high hit rate.
+        wins = pnl[pnl > 0]
+        losses = pnl[pnl < 0]
+        gross_win = float(wins.sum())
+        gross_loss = float(-losses.sum())      # positive magnitude
+        avg_win = float(wins.mean()) if len(wins) else 0.0
+        avg_loss = float(losses.mean()) if len(losses) else 0.0   # negative
+        profit_factor = (gross_win / gross_loss) if gross_loss else float("inf")
+        payoff = (avg_win / abs(avg_loss)) if avg_loss else float("inf")
+
+        # Daily Sharpe -- the P&L path's risk-adjusted return, annualised on
+        # ~252 trading days. Reads across configs far better than raw total.
+        if len(dvals) > 1 and dvals.std(ddof=1) > 0:
+            sharpe = float(dvals.mean() / dvals.std(ddof=1) * math.sqrt(252))
+        else:
+            sharpe = 0.0
+        avg_hold = float(np.mean([e.minutes_held for e in self.episodes]))
+
         return {
             "n": len(pnl), "hit": round(float((pnl > 0).mean()), 3),
             "mean_pnl": round(float(pnl.mean()), 2),
             "median_pnl": round(float(np.median(pnl)), 2),
             "t": round(float(pnl.mean() / se), 2) if se else 0.0,
             "total": round(float(pnl.sum()), 2),
+            "profit_factor": round(profit_factor, 2),
+            "avg_win": round(avg_win, 2), "avg_loss": round(avg_loss, 2),
+            "payoff": round(payoff, 2),
+            "avg_hold_min": round(avg_hold, 1),
+            "sharpe": round(sharpe, 2),
             "days": len(daily), "win_days": int((dvals > 0).sum()),
             "worst_day": round(float(dvals.min()), 2),
             "best_day": round(float(dvals.max()), 2),
@@ -169,7 +202,11 @@ def simulate(bars: pd.DataFrame, p: SimParams) -> SimResult:
             position_id=0, entry_price=round(entry, 2), quantity=p.qty,
             scale_out_gain=p.scale_gain, trail_pct=p.trail_pct,
             stop_loss_pct=p.stop_pct,
+            give_up_minutes=p.give_up_minutes,
+            give_up_progress=p.give_up_progress,
+            max_hold_minutes=p.max_hold_minutes,
         )
+        entry_minute = m               # minutes-since-midnight at the fill
         pnl = 0.0
         exit_kind = "flatten"
         j = i + 1
@@ -183,7 +220,7 @@ def simulate(bars: pd.DataFrame, p: SimParams) -> SimResult:
                 st.remaining, st.closed = 0, True
                 exit_kind = "flatten"
                 break
-            act = brackets.check(st, bid_j)
+            act = brackets.check(st, bid_j, minutes_held=mj - entry_minute)
             if act.kind != "none":
                 pnl += act.sell_qty * (act.est_price - st.entry_price) * 100
                 exit_kind = act.kind

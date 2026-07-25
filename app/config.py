@@ -56,6 +56,24 @@ class Settings(BaseSettings):
     scalper_entry_burst: float = float(os.getenv("SCALPER_ENTRY_BURST", "0.0020"))
     scalper_burst_window: float = float(os.getenv("SCALPER_BURST_WINDOW", "45"))
     scalper_cooldown: float = float(os.getenv("SCALPER_COOLDOWN", "180"))
+    # Real-time condition gate (app/trading/conditions.py): refuse burst
+    # entries in chop or against a decisive trend. On by default -- with no
+    # directional edge, the only honest way to raise the win rate is to
+    # decline the tape that historically bled.
+    scalper_condition_gate: bool = (
+        os.getenv("SCALPER_CONDITION_GATE", "true").lower() == "true"
+    )
+    # Seconds of spot path the gate reads for its trend/efficiency call.
+    scalper_trend_window: float = float(os.getenv("SCALPER_TREND_WINDOW", "300"))
+    # Kaufman efficiency floor; below this the tape is chop and entries skip.
+    scalper_min_efficiency: float = float(
+        os.getenv("SCALPER_MIN_EFFICIENCY", "0.35")
+    )
+    # A drift beyond this (bps, over the window) that OPPOSES the burst blocks
+    # the entry -- no calls into a decisive slide, no puts into a rip.
+    scalper_oppose_trend_bps: float = float(
+        os.getenv("SCALPER_OPPOSE_TREND_BPS", "12")
+    )
     # Absolute backstop on a day's realized loss.
     scalper_max_daily_loss: float = float(
         os.getenv("SCALPER_MAX_DAILY_LOSS", "500")

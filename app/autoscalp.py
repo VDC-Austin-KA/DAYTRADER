@@ -17,11 +17,16 @@ days): ATM SPY 0DTE, fast cycles, cut losses immediately -- now with the
 scale-out/trail exit from app/trading/brackets.py instead of all-out
 paper-hands exits.
 
-  ENTRIES (burst rule): when the underlying moves >= ``entry_burst`` in
-  under ``burst_window`` seconds, buy the ATM contract in the move's
-  direction (call on up-burst, put on down-burst). One position at a time;
-  cooldown between entries; all session rules apply (no entries after
-  14:00 CT, flatten 14:45 CT, liquidity gates, buying-power cap).
+  ENTRIES (burst rule + condition gate): when the underlying moves >=
+  ``entry_burst`` in under ``burst_window`` seconds, a burst is proposed in
+  the move's direction. Before it becomes an order the REAL-TIME CONDITION
+  GATE (app/trading/conditions.py) scores the tape the burst fired into and
+  refuses it in chop (low Kaufman efficiency) or against a decisive trend
+  (a call into a slide, a put into a rip) -- the two regimes this repo's own
+  backtests tie to the losses. A burst that clears the gate buys the ATM
+  contract (call on up, put on down). One position at a time; cooldown
+  between entries; all session rules apply (no entries after 14:00 CT,
+  flatten 14:45 CT, liquidity gates, buying-power cap).
 
   EXITS: every pushed tick runs the bracket state machine. Bank half at
   +75%, trail the rest 25% off the high, hard-stop at -35%.
@@ -67,6 +72,12 @@ TRADE_MODE = settings.scalper_trade_mode
 MAX_DAILY_LOSS_FRAC = settings.scalper_max_daily_loss_frac
 MAX_DAILY_LOSS_FLOOR = settings.scalper_max_daily_loss   # absolute backstop
 
+# Real-time condition gate (see app/trading/conditions.py).
+CONDITION_GATE = settings.scalper_condition_gate
+TREND_WINDOW = settings.scalper_trend_window
+MIN_EFFICIENCY = settings.scalper_min_efficiency
+OPPOSE_TREND_BPS = settings.scalper_oppose_trend_bps
+
 
 def daily_loss_limit(buying_power: float) -> float:
     """Today's loss budget in dollars. Never exceeds the absolute floor."""
@@ -94,6 +105,7 @@ class TickCache:
 
 CACHE = TickCache()
 _spot_path: deque = deque()          # (ts, price) for the burst detector
+_trend_path: deque = deque()         # (ts, price) for the condition gate
 
 
 def _record_spot(price: float) -> None:
@@ -103,6 +115,12 @@ def _record_spot(price: float) -> None:
     cutoff = now - BURST_WINDOW
     while _spot_path and _spot_path[0][0] < cutoff:
         _spot_path.popleft()
+    # A longer window for the condition gate: it judges the regime the burst
+    # fired into, which needs more context than the burst detector's window.
+    _trend_path.append((now, price))
+    tcut = now - TREND_WINDOW
+    while _trend_path and _trend_path[0][0] < tcut:
+        _trend_path.popleft()
 
 
 def _recent_daily_pnl(db, pf, days: int = 10) -> list[float]:
@@ -203,7 +221,7 @@ def main() -> int:   # pragma: no cover - needs a live gateway
 
     from .data import moomoo_data as mm
     from .database import SessionLocal, init_db
-    from .trading import brackets, notify, paper, scalp
+    from .trading import brackets, conditions, notify, paper, scalp
     from .trading import session as sess
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -329,6 +347,18 @@ def main() -> int:   # pragma: no cover - needs a live gateway
                             "entries today", realized, limit)
                 if (can and not open_pos and now - last_entry > COOLDOWN):
                     direction = detect_burst()
+                    # Real-time condition gate: a burst is necessary but not
+                    # sufficient. Refuse it in chop or against a decisive
+                    # trend -- the two regimes the backtests tie to the losses.
+                    if direction and CONDITION_GATE:
+                        assessment = conditions.assess(
+                            list(_trend_path), direction,
+                            min_efficiency=MIN_EFFICIENCY,
+                            oppose_trend_bps=OPPOSE_TREND_BPS)
+                        if not assessment.tradeable:
+                            log.info("entry gated (%s-burst): %s",
+                                     direction, assessment.describe())
+                            direction = None
                     if direction:
                         right = "call" if direction == "up" else "put"
                         pick = None

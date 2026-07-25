@@ -78,3 +78,53 @@ def test_random_data_yields_no_significant_edge():
     assert abs(r.t_stat) < 3.0, (
         f"Found t={r.t_stat:.2f} on random walks -- the harness is biased."
     )
+
+
+# --- Scalp simulator: the give-up exit and the richer summary ------------
+
+def _one_day_bleed(base: float = 500.0, burst_at: int = 30,
+                   n: int = 380) -> pd.DataFrame:
+    """One session that bursts up once, then goes dead flat.
+
+    A flat underlying after the burst isolates theta: the long call the sim
+    buys can only decay. It is the exact loser the give-up rule targets --
+    no reversal for the -35% floor to catch, just the clock.
+    """
+    idx = pd.date_range("2026-03-02 09:30", periods=n, freq="1min")
+    close = np.full(n, base)
+    close[burst_at] = base * 1.0012          # +12 bps one-bar up-burst
+    return pd.DataFrame(
+        {"Open": close, "High": close, "Low": close, "Close": close,
+         "Volume": np.full(n, 1e6)},
+        index=idx,
+    )
+
+
+def test_give_up_cuts_the_theta_bleed_vs_holding():
+    """Enabling give_up_minutes turns a slow theta loss into a small one."""
+    from app.backtest.scalpsim import SimParams, simulate
+
+    bars = _one_day_bleed()
+    common = dict(burst_bps=8, cooldown_bars=5, qty=5)
+    held = simulate(bars, SimParams(give_up_minutes=0, **common)).summary()
+    cut = simulate(bars, SimParams(give_up_minutes=15, **common)).summary()
+
+    assert held["n"] == 1 and cut["n"] == 1
+    assert "give_up" in cut["exits"], cut["exits"]
+    assert cut["mean_pnl"] > held["mean_pnl"], (
+        f"give-up should lose less: cut {cut['mean_pnl']} vs held "
+        f"{held['mean_pnl']}"
+    )
+
+
+def test_summary_reports_the_win_loss_anatomy():
+    """The new honesty metrics are present and internally consistent."""
+    from app.backtest.scalpsim import SimParams, simulate
+
+    bars = _one_day_bleed()
+    s = simulate(bars, SimParams(burst_bps=8, qty=5)).summary()
+    for k in ("profit_factor", "avg_win", "avg_loss", "payoff",
+              "sharpe", "avg_hold_min"):
+        assert k in s, f"missing metric {k}"
+    # Losses are recorded as negative, wins as non-negative -- signs must hold.
+    assert s["avg_loss"] <= 0 and s["avg_win"] >= 0

@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from ..backtest import vwap
+from ..backtest import confluence, vwap
 
 
 @dataclass
@@ -70,4 +70,38 @@ def assess_entry(session_bars: pd.DataFrame, **kw) -> EntryDecision:
         f"break below OR low {readings['or_low']} under falling VWAP "
         f"{readings['vwap']} (eff {readings['efficiency']})",
         readings,
+    )
+
+
+def assess_entry_confluence(session_bars: pd.DataFrame, **kw) -> EntryDecision:
+    """Like :func:`assess_entry`, but requires multi-factor confluence.
+
+    Reuses ``confluence.compute_confluence_signal`` so the daemon's confirmed
+    entries are identical to what the walk-forward backtest scored -- the
+    stronger, fewer-trades model, with trend (EMA) and momentum-health (RSI)
+    agreement required on top of the VWAP-opening-range break.
+    """
+    if session_bars is None or len(session_bars) < 2:
+        return EntryDecision(None, "insufficient bars this session")
+
+    sig = confluence.compute_confluence_signal(session_bars, **kw)
+    last = sig.iloc[-1]
+    if last["surge"] < 50 or last["direction"] == "neutral":
+        return EntryDecision(None, "no confirmed confluence break", {
+            "confirms": int(last.get("confirms", 0)),
+            "rsi": round(float(last["rsi"]), 1) if pd.notna(last.get("rsi")) else None,
+        })
+
+    side = "call" if last["direction"] == "up" else "put"
+    return EntryDecision(
+        side,
+        f"confluence {side.upper()}: VWAP-OR break + trend + RSI "
+        f"{float(last['rsi']):.0f} ({int(last['confirms'])}/2 confirms)",
+        {
+            "close": round(float(last["close"]), 2),
+            "rsi": round(float(last["rsi"]), 1),
+            "ema_fast": round(float(last["ema_fast"]), 2),
+            "ema_slow": round(float(last["ema_slow"]), 2),
+            "confirms": int(last["confirms"]),
+        },
     )

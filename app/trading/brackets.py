@@ -43,6 +43,7 @@ call ``check(state, bid)`` exactly as before and get the price-only machine
 State machine per position:
     OPEN --(bid >= scale price)------> RUNNER (half banked, trail armed)
     OPEN --(bid <= hard stop)--------> EXIT ALL (hard_stop)
+    ANY  --(bid >= target)-----------> EXIT ALL (take_profit) [if target set]
     OPEN --(held, no progress)-------> EXIT ALL (give_up)   [needs time]
     ANY  --(held >= max_hold)--------> EXIT ALL (time_stop) [needs time]
     RUNNER --(bid <= trail)----------> EXIT REST (trail_stop)
@@ -71,6 +72,9 @@ STOP_LOSS_PCT = 0.35
 GIVE_UP_MINUTES = 0.0
 GIVE_UP_PROGRESS = 0.10
 MAX_HOLD_MINUTES = 0.0
+# Defined profit target, off by default: the continuation model wants an
+# open-ended runner, so only reversion entries should set this.
+TAKE_PROFIT_GAIN = 0.0
 
 
 @dataclass
@@ -90,6 +94,11 @@ class BracketState:
     give_up_progress: float = GIVE_UP_PROGRESS
     # Absolute time backstop: flatten after this many minutes (0 = off).
     max_hold_minutes: float = MAX_HOLD_MINUTES
+    # Defined profit target: exit EVERYTHING at this gain (0 = off, the
+    # open-ended runner the trail is built for). Mean-reversion trades want
+    # this -- a fade travels to the mean and stops, so trailing behind the
+    # high gives the edge back instead of banking it at the destination.
+    take_profit_gain: float = TAKE_PROFIT_GAIN
     # --- live state ---
     high_water: float = 0.0
     scaled_out: bool = False
@@ -119,6 +128,13 @@ class BracketState:
         """Minimum bid by the give-up deadline to be spared the cut."""
         return round(self.entry_price * (1 + self.give_up_progress), 2)
 
+    @property
+    def take_profit_price(self) -> float:
+        """Full-exit target. 0 when no target is set (open-ended runner)."""
+        if not self.take_profit_gain:
+            return 0.0
+        return round(self.entry_price * (1 + self.take_profit_gain), 2)
+
     def scale_qty(self) -> int:
         """Contracts to bank at the scale-out. At least 1, never all when
         quantity > 1 (a 1-lot has nothing to split -- it just trails)."""
@@ -139,12 +155,15 @@ class BracketState:
             )
         if self.max_hold_minutes:
             base += f", time stop {self.max_hold_minutes:.0f}m"
+        if self.take_profit_gain:
+            base += (f", HARD TARGET {self.take_profit_price:.2f} "
+                     f"(+{self.take_profit_gain:.0%}, full exit)")
         return base
 
 
 @dataclass
 class BracketAction:
-    kind: str          # scale_out | trail_stop | hard_stop |
+    kind: str          # scale_out | trail_stop | hard_stop | take_profit |
                        # give_up | time_stop | none
     sell_qty: int
     est_price: float   # live bid -- the honest fill estimate
@@ -206,6 +225,17 @@ def check(
                 f"bid {bid:.2f} < {state.give_up_price:.2f} "
                 f"(+{state.give_up_progress:.0%}); cutting the theta bleed",
                 state)
+
+    # 3. Defined profit target -- full exit, for trades with a destination
+    # (a fade travels to the mean and stops). Outranks the trail and the
+    # scale-out: when a target is set it IS the plan, so hitting it banks the
+    # whole position rather than leaving a runner to give the move back.
+    if state.take_profit_gain and bid >= state.take_profit_price:
+        qty, state.remaining, state.closed = state.remaining, 0, True
+        return BracketAction(
+            "take_profit", qty, bid,
+            f"bid {bid:.2f} >= target {state.take_profit_price:.2f} "
+            f"(+{state.take_profit_gain:.0%} from entry)", state)
 
     # 4. Trailing stop -- armed only once the runner exists.
     if state.scaled_out and bid <= state.trail_stop:

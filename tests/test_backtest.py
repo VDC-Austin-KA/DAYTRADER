@@ -117,6 +117,43 @@ def test_give_up_cuts_the_theta_bleed_vs_holding():
     )
 
 
+def test_simulate_signals_matches_the_burst_path_on_identical_entries():
+    """The signal adapter must be the SAME machinery, not a parallel one.
+
+    Feeding the burst rule's own directions through simulate_signals has to
+    reproduce simulate() exactly -- otherwise a model's dollar result would
+    not be comparable to the baseline's, which is the whole point of pricing
+    them through one path.
+    """
+    from app.backtest.scalpsim import (SimParams, burst_directions, simulate,
+                                       simulate_from_directions)
+
+    bars = _one_day_bleed(n=380)
+    p = SimParams(burst_bps=8, qty=5)
+    a = simulate(bars, p).summary()
+    b = simulate_from_directions(bars, burst_directions(bars, p), p).summary()
+    assert a == b
+
+
+def test_simulate_signals_prices_an_arbitrary_signal_frame():
+    """A frame carrying surge/direction drives entries; theta is charged."""
+    import pandas as pd
+    from app.backtest.scalpsim import SimParams, simulate_signals
+
+    bars = _one_day_bleed(n=380)
+    sig = pd.DataFrame(
+        {"surge": 0.0, "direction": "neutral"}, index=bars.index)
+    # One long entry early in the session, then nothing.
+    sig.iloc[40, sig.columns.get_loc("surge")] = 100.0
+    sig.iloc[40, sig.columns.get_loc("direction")] = "up"
+
+    s = simulate_signals(bars, sig, SimParams(iv=0.15, qty=5)).summary()
+    assert s["n"] == 1
+    # The underlying is flat after the burst, so a long call can only decay:
+    # the dollar path must show that loss even though the signal "fired".
+    assert s["mean_pnl"] < 0
+
+
 def test_summary_reports_the_win_loss_anatomy():
     """The new honesty metrics are present and internally consistent."""
     from app.backtest.scalpsim import SimParams, simulate

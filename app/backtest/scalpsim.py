@@ -152,14 +152,27 @@ class SimResult:
         }
 
 
-def simulate(bars: pd.DataFrame, p: SimParams) -> SimResult:
-    """Replay the whole history one session at a time."""
+def simulate_from_directions(
+    bars: pd.DataFrame, dirs: np.ndarray, p: SimParams
+) -> SimResult:
+    """Option-level P&L for an arbitrary entry signal.
+
+    ``dirs`` is per-bar and parallel to ``bars``: "up" / "down" marks a bar
+    whose CLOSE produced an entry decision, "" means no entry. The fill is
+    taken on the following bar, so any signal source -- the burst rule, the
+    VWAP breakout, the exhaustion fade -- is priced through the same
+    Black-Scholes/bracket machinery and the numbers are comparable.
+
+    Splitting this out is what lets the signal work (which measures
+    direction, in bps of underlying) be re-scored in DOLLARS with theta and
+    the spread charged. A direction edge that cannot pay those two costs is
+    not a strategy, and only this path can tell you which it is.
+    """
     res = SimResult(params=p)
     close = bars["Close"]
     minutes = bars.index.hour * 60 + bars.index.minute
     days = bars.index.date
 
-    ret = close.pct_change(p.burst_bars).to_numpy()
     closes = close.to_numpy()
     mins = np.asarray(minutes)
     day_arr = np.array([str(d) for d in days])
@@ -168,22 +181,18 @@ def simulate(bars: pd.DataFrame, p: SimParams) -> SimResult:
     cooldown_until = -1
     while i < n:
         m = mins[i]
-        if (m < p.entry_start_et or m >= p.entry_end_et or i <= cooldown_until
-                or not np.isfinite(ret[i])):
+        if (m < p.entry_start_et or m >= p.entry_end_et or i <= cooldown_until):
             i += 1
             continue
-        move = ret[i]
-        if abs(move) * 10_000 < p.burst_bps:
+        direction = dirs[i] if i < len(dirs) else ""
+        if direction not in ("up", "down"):
             i += 1
             continue
 
-        direction = "up" if move > 0 else "down"
-        if p.mode == "fade":
-            direction = "up" if direction == "down" else "down"
         right = "call" if direction == "up" else "put"
-        # Fill on the NEXT bar: the burst is only knowable at this bar's
-        # close, so the live daemon pays the post-burst price, not the
-        # signal price. Filling at bar i would smuggle the burst itself
+        # Fill on the NEXT bar: the signal is only knowable at this bar's
+        # close, so the live daemon pays the post-signal price, not the
+        # signal price. Filling at bar i would smuggle the move itself
         # into the P&L.
         if i + 1 >= n or day_arr[i + 1] != day_arr[i]:
             i += 1
@@ -246,3 +255,38 @@ def simulate(bars: pd.DataFrame, p: SimParams) -> SimResult:
         cooldown_until = j + p.cooldown_bars
         i = j + 1
     return res
+
+
+def burst_directions(bars: pd.DataFrame, p: SimParams) -> np.ndarray:
+    """The original burst rule, expressed as a per-bar direction array."""
+    ret = bars["Close"].pct_change(p.burst_bars).to_numpy()
+    dirs = np.full(len(bars), "", dtype=object)
+    for i, move in enumerate(ret):
+        if not np.isfinite(move) or abs(move) * 10_000 < p.burst_bps:
+            continue
+        d = "up" if move > 0 else "down"
+        if p.mode == "fade":
+            d = "up" if d == "down" else "down"
+        dirs[i] = d
+    return dirs
+
+
+def simulate(bars: pd.DataFrame, p: SimParams) -> SimResult:
+    """Replay the whole history one session at a time, on the burst rule."""
+    return simulate_from_directions(bars, burst_directions(bars, p), p)
+
+
+def simulate_signals(
+    bars: pd.DataFrame, sig: pd.DataFrame, p: SimParams,
+    threshold: float = 50.0,
+) -> SimResult:
+    """Price a signal frame (vwap / confluence / reversion / router) in dollars.
+
+    ``sig`` is any frame carrying the engine schema -- ``surge`` and
+    ``direction`` -- indexed like ``bars``. Bars the signal does not cover
+    simply produce no entry.
+    """
+    sig = sig.reindex(bars.index)
+    fired = (sig["surge"].fillna(0) >= threshold)
+    dirs = np.where(fired, sig["direction"].fillna(""), "")
+    return simulate_from_directions(bars, np.asarray(dirs, dtype=object), p)

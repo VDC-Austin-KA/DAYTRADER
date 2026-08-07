@@ -16,7 +16,16 @@ results should be read as slightly conservative on winners, optimistic on
 IV-crush days. Every run states its IV and spread assumptions; stress both.
 
 Costs are charged the way the live loop pays them: buy at mid + half_spread,
-every exit at mid - half_spread.
+every exit at mid - half_spread, per leg.
+
+THE INSTRUMENT IS A VARIABLE
+----------------------------
+``SimParams.structure`` selects what actually gets bought when a signal fires
+-- a long ATM contract, an ITM one, a vertical, any of them at 1-3 DTE (see
+``structures.py``). It defaults to the single long ATM 0DTE contract, so every
+result produced before that module existed reproduces unchanged. Varying it
+answers a question separate from "is the signal right": given the same
+direction calls, is there an instrument whose costs the edge CAN pay?
 """
 from __future__ import annotations
 
@@ -27,32 +36,13 @@ import numpy as np
 import pandas as pd
 
 from ..trading import brackets
+from .structures import (  # noqa: F401  (bs_premium re-exported for callers)
+    LONG_ATM, MINUTES_PER_YEAR, Structure, bs_premium,
+)
 
-MINUTES_PER_YEAR = 365.0 * 24 * 60
 EXPIRY_ET = 16 * 60           # minutes since midnight ET
 LAST_ENTRY_ET = 15 * 60       # 14:00 CT
 FLATTEN_ET = 15 * 60 + 45     # 14:45 CT
-
-
-def _norm_cdf(x: float) -> float:
-    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-
-def bs_premium(spot: float, strike: float, minutes_left: float,
-               iv: float, right: str) -> float:
-    """Black-Scholes, zero rates -- fine at this horizon."""
-    if minutes_left <= 0:
-        intrinsic = spot - strike if right == "call" else strike - spot
-        return max(0.0, intrinsic)
-    t = minutes_left / MINUTES_PER_YEAR
-    sig_rt = iv * math.sqrt(t)
-    if sig_rt <= 0:
-        return max(0.0, spot - strike if right == "call" else strike - spot)
-    d1 = (math.log(spot / strike) + 0.5 * sig_rt * sig_rt) / sig_rt
-    d2 = d1 - sig_rt
-    if right == "call":
-        return spot * _norm_cdf(d1) - strike * _norm_cdf(d2)
-    return strike * _norm_cdf(-d2) - spot * _norm_cdf(-d1)
 
 
 @dataclass
@@ -77,6 +67,15 @@ class SimParams:
     # richer than the IV you exit at. 1.10 = a 10% IV-crush toll per trade.
     entry_iv_mult: float = 1.10
     half_spread: float = 0.01     # observed on ATM SPY 0DTE
+    # Proportional half-spread, charged per leg as max(half_spread, this x
+    # premium). 0 reproduces the flat-penny model exactly. Turn it on to stop
+    # expensive (ITM, longer-dated) legs from looking cheaper to trade than
+    # they quote in reality.
+    rel_half_spread: float = 0.0
+    # The instrument the signal is expressed through. Defaults to the single
+    # long ATM 0DTE contract every earlier result was priced on, so those
+    # numbers reproduce bit for bit; see app/backtest/structures.py.
+    structure: Structure = LONG_ATM
     entry_start_et: int = 9 * 60 + 45   # skip the open rotation
     entry_end_et: int = LAST_ENTRY_ET
 
@@ -86,11 +85,12 @@ class Episode:
     day: str
     entry_time: str
     right: str
-    strike: float
-    entry_prem: float
+    strike: float                 # the ATM base the legs are struck around
+    entry_prem: float             # normalised entry mark, spreads included
     pnl: float                    # $ for the whole position
     exit_kind: str
     minutes_held: int
+    structure: str = "long_atm"
 
 
 @dataclass
@@ -200,9 +200,18 @@ def simulate_from_directions(
         i += 1
         m = mins[i]
         spot = closes[i]
-        strike = round(spot)          # SPY has $1 strikes at the money
-        mid = bs_premium(spot, strike, EXPIRY_ET - m, p.iv * p.entry_iv_mult, right)
-        entry = mid + p.half_spread
+        base = round(spot)            # SPY has $1 strikes at the money
+        st_def = p.structure
+        # Collateral depends only on the strikes, so it is fixed at entry and
+        # reused for every mark -- the shift that makes a credit structure
+        # read as a long position (see structures.py).
+        coll = st_def.collateral(base, direction)
+        prem = st_def.leg_premiums(
+            spot, base, EXPIRY_ET - m,
+            st_def.entry_iv(p.iv, p.entry_iv_mult), direction)
+        net = sum(l.qty * pr for l, pr in zip(st_def.legs, prem))
+        entry = (net + coll) + st_def.crossing_cost(
+            p.half_spread, p.rel_half_spread, prem)
         if entry < 0.05:              # untradeably cheap; skip
             i += 1
             continue
@@ -222,8 +231,12 @@ def simulate_from_directions(
         this_day = day_arr[i]
         while j < n and day_arr[j] == this_day:
             mj = mins[j]
-            mid_j = bs_premium(closes[j], strike, EXPIRY_ET - mj, p.iv, right)
-            bid_j = max(0.0, round(mid_j - p.half_spread, 2))
+            prem_j = st_def.leg_premiums(
+                closes[j], base, EXPIRY_ET - mj, p.iv, direction)
+            net_j = sum(l.qty * pr for l, pr in zip(st_def.legs, prem_j))
+            bid_j = max(0.0, round(
+                (net_j + coll) - st_def.crossing_cost(
+                    p.half_spread, p.rel_half_spread, prem_j), 2))
             if mj >= FLATTEN_ET:
                 pnl += st.remaining * (bid_j - st.entry_price) * 100
                 st.remaining, st.closed = 0, True
@@ -239,18 +252,21 @@ def simulate_from_directions(
         else:
             # Data ended mid-position (last day): mark at final bid.
             if st.remaining:
-                last_bid = max(0.0, bs_premium(
-                    closes[min(j, n - 1)], strike,
-                    max(0, EXPIRY_ET - mins[min(j, n - 1)]), p.iv, right,
-                ) - p.half_spread)
+                k = min(j, n - 1)
+                prem_k = st_def.leg_premiums(
+                    closes[k], base, max(0, EXPIRY_ET - mins[k]), p.iv, direction)
+                net_k = sum(l.qty * pr for l, pr in zip(st_def.legs, prem_k))
+                last_bid = max(0.0, (net_k + coll) - st_def.crossing_cost(
+                    p.half_spread, p.rel_half_spread, prem_k))
                 pnl += st.remaining * (last_bid - st.entry_price) * 100
                 exit_kind = "data_end"
 
         # A scale-out that later flattens: both legs already accumulated.
         res.episodes.append(Episode(
             day=this_day, entry_time=str(bars.index[i]), right=right,
-            strike=strike, entry_prem=round(entry, 2), pnl=round(pnl, 2),
+            strike=base, entry_prem=round(entry, 2), pnl=round(pnl, 2),
             exit_kind=exit_kind, minutes_held=int(j - i),
+            structure=st_def.name,
         ))
         cooldown_until = j + p.cooldown_bars
         i = j + 1
